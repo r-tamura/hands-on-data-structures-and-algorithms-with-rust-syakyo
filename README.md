@@ -1,1 +1,1 @@
-# hands-on-data-structures-with-rust-syakyo-and-algorithms-
+# hands-on-data-structures-and-algorithms-with-rust-syakyo
