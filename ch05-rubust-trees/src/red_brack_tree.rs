@@ -1,4 +1,5 @@
-use std::{cell::RefCell, io::Write, mem, rc::Rc};
+use log::debug;
+use std::{cell::RefCell, mem, rc::Rc};
 
 use crate::IoTDevice;
 
@@ -9,7 +10,7 @@ enum Color {
 }
 
 #[derive(PartialEq)]
-enum RBOperation {
+enum RedBlackOp {
     LeftNode,
     RightNode,
 }
@@ -40,12 +41,26 @@ impl Node {
         }
     }
 
+    pub fn is_root(&self) -> bool {
+        self.parent.is_none()
+    }
+
     pub fn expect_left(&self) -> Rc<RefCell<Node>> {
         self.left.as_ref().unwrap().clone()
     }
 
     pub fn expect_right(&self) -> Rc<RefCell<Node>> {
         self.right.as_ref().unwrap().clone()
+    }
+
+    pub fn switch_color(&mut self, color: Color) {
+        assert!(
+            self.color != color,
+            "color should be different error: current color {:?}, but got {:?}",
+            self.color,
+            color
+        );
+        self.color = color;
     }
 }
 
@@ -78,46 +93,55 @@ impl DeviceRegistry {
     ///     - parent左回転
     ///     - (2)を適用
     pub fn insert(&mut self, device: IoTDevice) {
-        self.length += 1;
-        let root = mem::replace(&mut self.root, None);
-        let (maybe_node, new_node) = self.insert_internal(root.clone(), device);
-        // self.root = self.fix_tree(new_tree.1);
-        self.root = maybe_node;
+        let new_node = self.insert_internal(device);
+        self.root = self.fix_tree(new_node);
     }
 
-    fn link_pair(parent: &Rc<RefCell<Node>>, child: &Rc<RefCell<Node>>, direction: RBOperation) {
+    fn pair(parent: &Rc<RefCell<Node>>, child: &Rc<RefCell<Node>>, direction: RedBlackOp) {
         match direction {
-            RBOperation::LeftNode => {
+            RedBlackOp::LeftNode => {
                 parent.borrow_mut().left = Some(child.clone());
+                debug!(
+                    "{:?}.left <- {:?}",
+                    parent.borrow().value.numeriacl_id,
+                    child.borrow().value.numeriacl_id,
+                );
             }
-            RBOperation::RightNode => {
+            RedBlackOp::RightNode => {
+                debug!(
+                    "{:?}.right <- {:?}",
+                    parent.borrow().value.numeriacl_id,
+                    child.borrow().value.numeriacl_id,
+                );
                 parent.borrow_mut().right = Some(child.clone());
             }
         };
         child.borrow_mut().parent = Some(parent.clone());
-        println!(
-            "linked: {:?} <=> {:?}",
-            &parent.borrow().value,
-            &child.borrow().value
+        debug!(
+            "parent: {:?} child: {:?}",
+            parent.borrow().value.numeriacl_id,
+            child.borrow().value.numeriacl_id
         );
     }
 
-    fn decide_direction(&self, a: &IoTDevice, b: &IoTDevice) -> RBOperation {
+    /// aの子供として挿入する場合、bが左/右どちらになるかを判定します
+    /// RedBlackOp::LeftNode: bはaの左側の子供になります
+    /// RedBlackOp::RightNode: bはaの右側の子供になります
+    fn decide_direction(&self, a: &IoTDevice, b: &IoTDevice) -> RedBlackOp {
         if a <= b {
-            RBOperation::RightNode
+            RedBlackOp::RightNode
         } else {
-            RBOperation::LeftNode
+            RedBlackOp::LeftNode
         }
     }
 
-    fn insert_internal(
-        &mut self,
-        maybe_root: Option<Rc<RefCell<Node>>>,
-        device: IoTDevice,
-    ) -> (Option<Rc<RefCell<Node>>>, Rc<RefCell<Node>>) {
-        let (maybe_node, new_node) = self.insert_rec(maybe_root.clone(), device);
+    fn insert_internal(&mut self, device: IoTDevice) -> Rc<RefCell<Node>> {
+        self.length += 1;
+        let maybe_root = mem::replace(&mut self.root, None);
+        let (maybe_root, new_node) = self.insert_rec(maybe_root.clone(), device);
         // println!("{:?} {:?}", &maybe_node, &new_node);
-        (maybe_node, new_node.clone())
+        self.root = maybe_root;
+        new_node.clone()
     }
 
     fn insert_rec(
@@ -128,29 +152,52 @@ impl DeviceRegistry {
         match maybe_current_node.take() {
             None => {
                 // 葉に到達したので、新しいノードを追加
+                debug!("inserting new node {:?}", device);
                 let new_node = Rc::new(RefCell::new(Node::new(device)));
                 (Some(new_node.clone()), new_node)
             }
             Some(current_node) => {
                 let new: Rc<RefCell<Node>>;
                 let current_device = current_node.borrow().value.clone();
+                debug!("--- current: {:?} new: {:?}", current_device, device);
 
                 match self.decide_direction(&current_device, &device) {
-                    RBOperation::LeftNode => {
+                    RedBlackOp::LeftNode => {
+                        debug!(
+                            "go to left: {:?} > new: {:?}",
+                            current_device.numeriacl_id, device.numeriacl_id
+                        );
                         let left = current_node.borrow().left.clone();
                         let (maybe_new_tree, new_node) = self.insert_rec(left, device);
                         new = new_node.clone();
 
-                        Self::link_pair(&current_node, &new_node, RBOperation::LeftNode);
+                        Self::pair(
+                            &current_node,
+                            &maybe_new_tree.unwrap(),
+                            RedBlackOp::LeftNode,
+                        );
                     }
-                    RBOperation::RightNode => {
+                    RedBlackOp::RightNode => {
+                        debug!(
+                            "go to right: current: {:?} <= new: {:?}",
+                            current_device.numeriacl_id, device.numeriacl_id
+                        );
                         let right = current_node.borrow().right.clone();
                         let (maybe_new_tree, new_node) = self.insert_rec(right, device);
                         new = new_node.clone();
 
-                        Self::link_pair(&current_node, &new_node, RBOperation::RightNode);
+                        Self::pair(
+                            &current_node,
+                            &maybe_new_tree.unwrap(),
+                            RedBlackOp::RightNode,
+                        );
                     }
                 }
+                debug!(
+                    "--- return current: {:?} new: {:?}",
+                    current_device,
+                    new.borrow().value,
+                );
 
                 (Some(current_node), new)
             }
@@ -158,38 +205,42 @@ impl DeviceRegistry {
     }
 
     fn fix_tree(&mut self, inserted: Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
-        let mut not_root = inserted.borrow().parent.is_some();
+        let mut current_is_not_root = !inserted.borrow().is_root();
 
-        let root = if not_root {
+        let root = if current_is_not_root {
             let mut parent_is_red = self.parent_color(&inserted) == Color::Red;
-            let mut inserted_node = inserted.clone();
-            while parent_is_red && not_root {
-                let grand_parent = inserted_node.borrow().parent.as_ref().unwrap().clone();
-                let Some((maybe_uncle, which)) = self.uncle(inserted_node.clone()) else {
+            let mut current = inserted.clone();
+            while parent_is_red && current_is_not_root {
+                let grand_parent = current.borrow().parent.as_ref().unwrap().clone();
+                let Some((maybe_uncle, which)) = self.uncle(current.clone()) else {
                     break;
                 };
+                let mut parent = self.parent_or_panic(&current);
                 match which {
-                    RBOperation::LeftNode => {
+                    //                 o  <- grand_parent
+                    //                / \
+                    //       uncle-> o   o <- parent
+                    //                   |
+                    //         current-> o
+                    RedBlackOp::LeftNode => {
                         // uncle is on the left
-                        let mut parent = self.expect_parent(&inserted_node);
-
                         match maybe_uncle {
                             Some(ref uncle) if uncle.borrow().color == Color::Red => {
-                                parent.borrow_mut().color = Color::Black;
-                                uncle.borrow_mut().color = Color::Black;
-                                grand_parent.borrow_mut().color = Color::Red;
-                                inserted_node = grand_parent;
+                                parent.borrow_mut().switch_color(Color::Black);
+                                uncle.borrow_mut().switch_color(Color::Black);
+                                grand_parent.borrow_mut().switch_color(Color::Red);
+                                current = grand_parent;
                             }
                             Some(_) | None => {
                                 if self.decide_direction(
                                     &parent.borrow().value,
-                                    &inserted_node.borrow().value,
-                                ) == RBOperation::LeftNode
+                                    &current.borrow().value,
+                                ) == RedBlackOp::LeftNode
                                 {
-                                    let tmp = self.expect_parent(&inserted_node);
-                                    inserted_node = tmp;
-                                    self.rotate(inserted_node.clone(), Rotation::Right);
-                                    parent = self.expect_parent(&inserted_node);
+                                    let tmp = self.parent_or_panic(&current);
+                                    current = tmp;
+                                    self.rotate(current.clone(), Rotation::Right);
+                                    parent = self.parent_or_panic(&current);
                                 }
 
                                 parent.borrow_mut().color = Color::Black;
@@ -201,31 +252,35 @@ impl DeviceRegistry {
                                     .clone()
                                     .borrow_mut()
                                     .color = Color::Red;
-                                self.rotate(self.expect_parent(&parent), Rotation::Left);
+                                self.rotate(self.parent_or_panic(&parent), Rotation::Left);
                             }
                         }
                     }
-                    RBOperation::RightNode => {
+                    //                 o  <- grand_parent
+                    //                / \
+                    //       uncle-> o   o <- parent
+                    //                   |
+                    //         current-> o
+                    RedBlackOp::RightNode => {
                         // uncle is on the right
-                        let mut parent = self.expect_parent(&inserted_node);
 
                         match maybe_uncle {
                             Some(ref uncle) if uncle.borrow().color == Color::Red => {
-                                parent.borrow_mut().color = Color::Black;
-                                uncle.borrow_mut().color = Color::Black;
-                                grand_parent.borrow_mut().color = Color::Red;
-                                inserted_node = grand_parent;
+                                parent.borrow_mut().switch_color(Color::Black);
+                                uncle.borrow_mut().switch_color(Color::Black);
+                                grand_parent.borrow_mut().switch_color(Color::Red);
+                                current = grand_parent;
                             }
                             Some(_) | None => {
                                 if self.decide_direction(
                                     &parent.borrow().value,
-                                    &inserted_node.borrow().value,
-                                ) == RBOperation::LeftNode
+                                    &current.borrow().value,
+                                ) == RedBlackOp::RightNode
                                 {
-                                    let tmp = self.expect_parent(&inserted_node);
-                                    inserted_node = tmp;
-                                    self.rotate(inserted_node.clone(), Rotation::Left);
-                                    parent = self.expect_parent(&inserted_node);
+                                    let tmp = self.parent_or_panic(&current);
+                                    current = tmp;
+                                    self.rotate(current.clone(), Rotation::Left);
+                                    parent = self.parent_or_panic(&current);
                                 }
 
                                 parent.borrow_mut().color = Color::Black;
@@ -237,21 +292,21 @@ impl DeviceRegistry {
                                     .clone()
                                     .borrow_mut()
                                     .color = Color::Red;
-                                self.rotate(self.expect_parent(&parent), Rotation::Right);
+                                self.rotate(self.parent_or_panic(&parent), Rotation::Right);
                             }
                         }
                     }
                 }
 
-                not_root = inserted_node.borrow().parent.is_some();
-                if not_root {
-                    parent_is_red = self.parent_color(&inserted_node) == Color::Red;
+                current_is_not_root = !current.borrow().is_root();
+                if current_is_not_root {
+                    parent_is_red = self.parent_color(&current) == Color::Red;
                 }
             }
-            while inserted_node.borrow().parent.is_some() {
-                inserted_node = self.expect_parent(&inserted_node);
+            while current.borrow().is_root() {
+                current = self.parent_or_panic(&current);
             }
-            Some(inserted_node)
+            Some(current)
         } else {
             Some(inserted)
         };
@@ -268,32 +323,33 @@ impl DeviceRegistry {
         }
     }
 
-    fn rotate_right(&self, n: Rc<RefCell<Node>>) {
-        let maybe_l = n.borrow().left.clone();
+    fn rotate_right(&self, node: Rc<RefCell<Node>>) {
+        let maybe_l = node.borrow().left.clone();
         // (1) 自ノードの左子ノード = 自ノードの元々の左子ノードの右子ノード
-        n.borrow_mut().left = maybe_l
+        node.borrow_mut().left = maybe_l
             .as_ref()
             .and_then(|child| child.borrow().right.clone());
 
         if maybe_l.is_some() {
-            let left_child = n.borrow().expect_left();
+            let left_child = node.borrow().expect_left();
             // (2) 左子ノードの親ノード = 自ノードの親ノード
-            left_child.borrow_mut().parent = n.borrow().parent.clone();
+            left_child.borrow_mut().parent = node.borrow().parent.clone();
             if left_child.borrow().right.is_some() {
                 // (3) 左子ノードの右ノードの親ノード = 自ノード
-                left_child.borrow().expect_right().borrow_mut().parent = Some(n.clone());
+                left_child.borrow().expect_right().borrow_mut().parent = Some(node.clone());
             }
         }
 
-        match n.borrow().parent.as_ref() {
+        match node.borrow().parent.as_ref() {
             // (4) 親ノードの子ノード = 左子ノード
             Some(p) => {
-                let insert_direction = self.decide_direction(&p.borrow().value, &n.borrow().value);
+                let insert_direction =
+                    self.decide_direction(&p.borrow().value, &node.borrow().value);
                 match insert_direction {
-                    RBOperation::LeftNode => {
+                    RedBlackOp::LeftNode => {
                         p.borrow_mut().right = maybe_l.clone();
                     }
-                    RBOperation::RightNode => {
+                    RedBlackOp::RightNode => {
                         p.borrow_mut().left = maybe_l.clone();
                     }
                 }
@@ -305,8 +361,8 @@ impl DeviceRegistry {
         }
         // (5) 左子ノードの右子ノード = 自ノード
         // (6) 自ノードの親ノード = 左子ノード
-        maybe_l.as_ref().unwrap().borrow_mut().right = Some(n.clone());
-        n.borrow_mut().parent = maybe_l;
+        maybe_l.as_ref().unwrap().borrow_mut().right = Some(node.clone());
+        node.borrow_mut().parent = maybe_l;
     }
 
     fn rotate_left(&self, node: Rc<RefCell<Node>>) {
@@ -323,7 +379,7 @@ impl DeviceRegistry {
             .clone()
     }
 
-    fn expect_parent(&self, node: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
+    fn parent_or_panic(&self, node: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
         node.borrow().parent.as_ref().unwrap().clone()
     }
 
@@ -331,18 +387,21 @@ impl DeviceRegistry {
         node.borrow().parent.as_ref()?.borrow().parent.clone()
     }
 
-    fn uncle(&self, node: Rc<RefCell<Node>>) -> Option<(Option<Rc<RefCell<Node>>>, RBOperation)> {
+    /// uncleノードを取得
+    /// which:
+    fn uncle(&self, node: Rc<RefCell<Node>>) -> Option<(Option<Rc<RefCell<Node>>>, RedBlackOp)> {
         let parent = (&node.borrow().parent).clone()?;
         let grand_parent = (&parent.borrow().parent).clone()?;
+        // 親ノードが祖父ノードのある方向にある場合、uncleノードは親ノードの反対側になる
         let uncle_and_which =
             match self.decide_direction(&grand_parent.borrow().value, &parent.borrow().value) {
-                RBOperation::LeftNode => {
+                RedBlackOp::LeftNode => {
                     let uncle = grand_parent.borrow().right.clone();
-                    Some((uncle, RBOperation::RightNode))
+                    Some((uncle, RedBlackOp::RightNode))
                 }
-                RBOperation::RightNode => {
+                RedBlackOp::RightNode => {
                     let uncle = grand_parent.borrow().left.clone();
-                    Some((uncle, RBOperation::LeftNode))
+                    Some((uncle, RedBlackOp::LeftNode))
                 }
             };
         uncle_and_which
@@ -358,27 +417,28 @@ impl DeviceRegistry {
 
     pub fn walk(&self, mut callback: impl FnMut(&IoTDevice, usize)) {
         self.root.as_ref().map(|root| {
-            self.walk_rec(root.clone(), callback, 0);
+            self.walk_rec(root.clone(), &mut callback, 0);
         });
     }
 
     fn walk_rec(
         &self,
         node: Rc<RefCell<Node>>,
-        mut callback: impl FnMut(&IoTDevice, usize),
+        callback: &mut impl FnMut(&IoTDevice, usize),
         level: usize,
     ) {
         let left = node.borrow().left.clone();
         let right = node.borrow().right.clone();
-        left.map(|l| callback(&l.borrow().value, level + 1));
+        debug!("current: {:?} level: {}", node.borrow().value, level);
+        left.map(|l| self.walk_rec(l.clone(), callback, level + 1));
         callback(&node.clone().borrow().value, level);
-        right.map(|r| callback(&r.borrow().value, level + 1));
+        right.map(|r| self.walk_rec(r.clone(), callback, level + 1));
     }
 }
 
 impl std::fmt::Display for DeviceRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.walk(|device, level| {
+        self.walk(&mut |device: &IoTDevice, level| {
             let indent = "  ".repeat(level);
             writeln!(f, "{}{:?}", indent, device.numeriacl_id).unwrap();
         });
@@ -399,9 +459,15 @@ impl Default for DeviceRegistry {
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
+    use log::debug;
+
     use crate::IoTDevice;
 
     use super::{DeviceRegistry, Node};
+
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
 
     fn device(id: u64) -> IoTDevice {
         IoTDevice::new(id, "", "")
@@ -423,9 +489,9 @@ mod tests {
     #[test]
     fn when_second_node_value_is_larger_then_root_node_should_have_right_child() {
         let mut registry = DeviceRegistry::default();
-        registry.insert(device(5));
-        registry.insert(device(6));
-        registry.insert(device(4));
+        registry.insert_internal(device(5));
+        registry.insert_internal(device(6));
+        registry.insert_internal(device(4));
 
         assert_eq!(registry.length, 3);
 
@@ -441,5 +507,86 @@ mod tests {
 
         assert_eq!(registry.length, 3);
         assert_eq!(format!("{}", registry), "  1\n2\n  3\n");
+    }
+
+    #[test]
+    fn test_insert_internal() {
+        init();
+        let mut registry = DeviceRegistry::default();
+        let p = device(6);
+        registry.insert_internal(p);
+        let n = device(4);
+        registry.insert_internal(n);
+        let r = device(5);
+        registry.insert_internal(r);
+        let l = device(2);
+        registry.insert_internal(l);
+        let gl = device(1);
+        registry.insert_internal(gl);
+        let gr = device(3);
+        registry.insert_internal(gr);
+
+        assert_eq!(registry.length, 6);
+        let should_p = &registry.root.as_ref().unwrap().borrow();
+        assert!(should_p.is_root());
+        let should_n = &should_p.left.as_ref().unwrap().borrow();
+        assert_eq!(should_n.value, device(4));
+        let should_r = &should_n.right.as_ref().unwrap().borrow();
+        assert_eq!(should_r.value, device(5));
+        let should_l = &should_n.left.as_ref().unwrap().borrow();
+        assert_eq!(should_l.value, device(2));
+        let should_gl = &should_l.left.as_ref().unwrap().borrow();
+        assert_eq!(should_gl.value, device(1));
+        let should_gr = &should_l.right.as_ref().unwrap().borrow();
+        assert_eq!(should_gr.value, device(3));
+
+        assert_eq!(
+            registry.to_string(),
+            "      1\n    2\n      3\n  4\n    5\n6\n"
+        );
+    }
+
+    #[test]
+    fn test_rotate_right() {
+        init();
+        let mut registry = DeviceRegistry::default();
+        let p = device(6);
+        registry.insert_internal(p);
+        let n = device(4);
+        registry.insert_internal(n);
+        let r = device(5);
+        registry.insert_internal(r);
+        let l = device(2);
+        registry.insert_internal(l);
+        let gl = device(1);
+        registry.insert_internal(gl);
+        let gr = device(3);
+        registry.insert_internal(gr);
+
+        // Act
+        registry.rotate(
+            registry.root.as_ref().unwrap().clone(),
+            super::Rotation::Right,
+        );
+
+        // Assert
+        assert_eq!(registry.length, 6);
+        let should_p = &registry.root.as_ref().unwrap().borrow();
+        assert!(should_p.is_root());
+        let should_n = &should_p.left.as_ref().unwrap().borrow();
+        assert_eq!(should_n.value, device(4));
+        let should_r = &should_n.right.as_ref().unwrap().borrow();
+        assert_eq!(should_r.value, device(5));
+        let should_l = &should_n.left.as_ref().unwrap().borrow();
+        assert_eq!(should_l.value, device(2));
+        let should_gl = &should_l.left.as_ref().unwrap().borrow();
+        assert_eq!(should_gl.value, device(1));
+        let should_gr = &should_l.right.as_ref().unwrap().borrow();
+        assert_eq!(should_gr.value, device(3));
+
+        assert_eq!(
+            registry.to_string(),
+            "      1\n    2\n      3\n  4\n    5\n6\n"
+        );
     }
 }
