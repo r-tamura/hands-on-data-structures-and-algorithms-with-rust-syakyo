@@ -363,19 +363,43 @@ impl DeviceRegistry {
 
     fn rotate(&self, node: Rc<RefCell<Node>>, direction: Rotation) {
         match direction {
-            Rotation::Left => self.rotate_left(node),
-            Rotation::Right => self.rotate_right(node),
+            Rotation::Left => {
+                let r = node.borrow().right.clone();
+                let gl = r.as_ref().and_then(|child| child.borrow().left.clone());
+                self.rotate_internal(node, r, gl, Rotation::Left);
+            }
+            Rotation::Right => {
+                let l = node.borrow().left.clone();
+                let gr = l.as_ref().and_then(|child| child.borrow().right.clone());
+                self.rotate_internal(node, l, gr, Rotation::Right);
+            }
         }
     }
 
-    fn rotate_right(&self, node: Rc<RefCell<Node>>) {
+    fn rotate_internal(
+        &self,
+        node: Rc<RefCell<Node>>,
+        child: Option<Rc<RefCell<Node>>>,
+        grandchild: Option<Rc<RefCell<Node>>>,
+        rotation: Rotation,
+    ) -> Rc<RefCell<Node>> {
         let p = node.borrow().parent.clone();
-        let l = node.borrow().left.clone();
-        let gr = l.as_ref().and_then(|child| child.borrow().right.clone());
         assert!(
-            l.as_ref().is_some(),
-            "if node does not have left child, it can not rotate right"
+            child.as_ref().is_some(),
+            "if node does not have a child, it can not rotate"
         );
+        // (5)/(6) 左子ノードの右子ノード <=> 自ノード
+        let child_direction = match rotation {
+            Rotation::Left => RedBlackOp::LeftNode,
+            Rotation::Right => RedBlackOp::RightNode,
+        };
+        Self::pair2(child.clone(), Some(node.clone()), child_direction);
+        // (1)/(3) 自ノードの左子ノード <=> 自ノードの元々の左子ノードの右子ノード
+        let grandchild_direction = match rotation {
+            Rotation::Left => RedBlackOp::RightNode,
+            Rotation::Right => RedBlackOp::LeftNode,
+        };
+        Self::pair2(Some(node.clone()), grandchild.clone(), grandchild_direction);
 
         // (2)/(4) 左子ノードの親ノード <=> 自ノードの親ノード
         match p {
@@ -383,21 +407,15 @@ impl DeviceRegistry {
             Some(p) => {
                 let insert_direction =
                     self.decide_direction(&p.clone().borrow().v, &node.borrow().v);
-                Self::pair2(Some(p.clone()), l.clone(), insert_direction);
+                Self::pair2(Some(p.clone()), child.clone(), insert_direction);
+                p.clone()
             }
             // (例外) 左子ノードの親ノード = None (左子ノードがrootになる場合)
             None => {
-                l.as_ref().unwrap().borrow_mut().parent = None;
+                child.as_ref().unwrap().borrow_mut().parent = None;
+                child.clone().unwrap()
             }
         }
-        // (5)/(6) 左子ノードの右子ノード <=> 自ノード
-        Self::pair2(l.clone(), Some(node.clone()), RedBlackOp::RightNode);
-        // (1)/(3) 自ノードの左子ノード <=> 自ノードの元々の左子ノードの右子ノード
-        Self::pair2(Some(node.clone()), gr.clone(), RedBlackOp::LeftNode);
-    }
-
-    fn rotate_left(&self, node: Rc<RefCell<Node>>) {
-        todo!();
     }
 
     fn parent_color(&self, node: &Rc<RefCell<Node>>) -> Color {
@@ -576,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn test_when_node_is_left_child_then_rotate_right_should_make_left_child_of_parent_left_child_of_node(
+    fn test_rotate_when_node_is_left_child_then_rotate_right_should_make_left_child_of_parent_left_child_of_node(
     ) {
         // 6
         //  l 4
@@ -636,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn test_when_node_is_left_child_then_rotate_right_should_make_right_child_of_parent_left_child_of_node(
+    fn test_rotate_when_node_is_left_child_then_rotate_right_should_make_right_child_of_parent_left_child_of_node(
     ) {
         // 6
         //  r 10
@@ -697,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn test_when_node_is_root_rotate_right_should_make_left_child_root() {
+    fn test_rotate_when_node_is_root_rotate_right_should_make_left_child_root() {
         // 6
         //  l 4
         //    l 2
@@ -751,5 +769,66 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(new_l.borrow().v, gr);
+    }
+
+    #[test]
+    fn test_rotate_when_node_is_left_child_then_rotate_left_should_make_right_child_of_parent_right_child_of_node(
+    ) {
+        // 6
+        //  r 10
+        //    l 8
+        //    r 12
+        //      l 11
+        //      r 13
+        // after rotate based on 10
+        // 6
+        //  r 12
+        //    l 10
+        //      l 8
+        //      r 11
+        //    r 13
+        init();
+        let mut registry = DeviceRegistry::default();
+        let p = device(6);
+        registry.insert_internal(p.clone());
+        let n = device(10);
+        registry.insert_internal(n.clone());
+        let l = device(8);
+        registry.insert_internal(l.clone());
+        let r = device(12);
+        registry.insert_internal(r.clone());
+        let gl = device(11);
+        registry.insert_internal(gl.clone());
+        let gr = device(13);
+        registry.insert_internal(gr.clone());
+
+        // Act
+        let node = registry
+            .root
+            .as_ref()
+            .unwrap()
+            .borrow()
+            .right
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        registry.rotate(node.clone(), super::Rotation::Left);
+
+        // Assert
+        assert_eq!(registry.length, 6);
+        let new_p = registry.root.as_ref().unwrap().clone();
+        assert!(new_p.borrow().is_root());
+        assert_eq!(new_p.borrow().v, p);
+        let new_pr = new_p.borrow().right.as_ref().unwrap().clone();
+        assert_eq!(new_pr.borrow().v, r);
+        let new_rl = new_pr.borrow().left.as_ref().unwrap().clone();
+        assert_eq!(new_rl.borrow().v, n);
+        let new_rr = new_pr.borrow().right.as_ref().unwrap().clone();
+        assert_eq!(new_rr.borrow().v, gr);
+        let new_nl = new_rl.borrow().left.as_ref().unwrap().clone();
+        assert_eq!(new_nl.borrow().v, l);
+        let new_nr = new_rl.borrow().right.as_ref().unwrap().clone();
+        assert_eq!(new_nr.borrow().v, gl);
     }
 }
