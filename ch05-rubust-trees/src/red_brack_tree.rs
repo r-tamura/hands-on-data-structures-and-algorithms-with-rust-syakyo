@@ -97,34 +97,7 @@ impl DeviceRegistry {
         self.root = self.fix_tree(new_node);
     }
 
-    fn pair(parent: &Rc<RefCell<Node>>, child: &Rc<RefCell<Node>>, direction: RedBlackOp) {
-        match direction {
-            RedBlackOp::LeftNode => {
-                parent.borrow_mut().left = Some(child.clone());
-                debug!(
-                    "{:?}.left <- {:?}",
-                    parent.borrow().v.numeriacl_id,
-                    child.borrow().v.numeriacl_id,
-                );
-            }
-            RedBlackOp::RightNode => {
-                debug!(
-                    "{:?}.right <- {:?}",
-                    parent.borrow().v.numeriacl_id,
-                    child.borrow().v.numeriacl_id,
-                );
-                parent.borrow_mut().right = Some(child.clone());
-            }
-        };
-        child.borrow_mut().parent = Some(parent.clone());
-        debug!(
-            "parent: {:?} child: {:?}",
-            parent.borrow().v.numeriacl_id,
-            child.borrow().v.numeriacl_id
-        );
-    }
-
-    fn pair2(
+    fn pair(
         parent: Option<Rc<RefCell<Node>>>,
         child: Option<Rc<RefCell<Node>>>,
         direction: RedBlackOp,
@@ -221,8 +194,8 @@ impl DeviceRegistry {
                         new = new_node.clone();
 
                         Self::pair(
-                            &current_node,
-                            &maybe_new_tree.unwrap(),
+                            Some(current_node.clone()),
+                            maybe_new_tree,
                             RedBlackOp::LeftNode,
                         );
                     }
@@ -236,8 +209,8 @@ impl DeviceRegistry {
                         new = new_node.clone();
 
                         Self::pair(
-                            &current_node,
-                            &maybe_new_tree.unwrap(),
+                            Some(current_node.clone()),
+                            maybe_new_tree,
                             RedBlackOp::RightNode,
                         );
                     }
@@ -288,6 +261,11 @@ impl DeviceRegistry {
                                     current = tmp;
                                     self.rotate(current.clone(), Rotation::Right);
                                     parent = self.parent_or_panic(&current);
+                                    debug!(
+                                        "{:?}'s parent is {:?}",
+                                        current.borrow().v,
+                                        parent.borrow().v
+                                    );
                                 }
 
                                 parent.borrow_mut().color = Color::Black;
@@ -393,13 +371,13 @@ impl DeviceRegistry {
             Rotation::Left => RedBlackOp::LeftNode,
             Rotation::Right => RedBlackOp::RightNode,
         };
-        Self::pair2(child.clone(), Some(node.clone()), child_direction);
+        Self::pair(child.clone(), Some(node.clone()), child_direction);
         // (1)/(3) 自ノードの左子ノード <=> 自ノードの元々の左子ノードの右子ノード
         let grandchild_direction = match rotation {
             Rotation::Left => RedBlackOp::RightNode,
             Rotation::Right => RedBlackOp::LeftNode,
         };
-        Self::pair2(Some(node.clone()), grandchild.clone(), grandchild_direction);
+        Self::pair(Some(node.clone()), grandchild.clone(), grandchild_direction);
 
         // (2)/(4) 左子ノードの親ノード <=> 自ノードの親ノード
         match p {
@@ -407,7 +385,7 @@ impl DeviceRegistry {
             Some(p) => {
                 let insert_direction =
                     self.decide_direction(&p.clone().borrow().v, &node.borrow().v);
-                Self::pair2(Some(p.clone()), child.clone(), insert_direction);
+                Self::pair(Some(p.clone()), child.clone(), insert_direction);
                 p.clone()
             }
             // (例外) 左子ノードの親ノード = None (左子ノードがrootになる場合)
