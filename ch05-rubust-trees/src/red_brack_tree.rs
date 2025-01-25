@@ -21,7 +21,6 @@ enum Rotation {
     Right,
 }
 
-#[derive(Debug)]
 struct Node {
     pub color: Color,
     pub v: IoTDevice,
@@ -62,11 +61,21 @@ impl Node {
         );
         self.color = color;
     }
+
+    pub fn set_color(&mut self, color: Color) {
+        self.color = color;
+    }
 }
 
 impl PartialEq for Node {
     fn eq(&self, other: &Self) -> bool {
         self.v == other.v
+    }
+}
+
+impl std::fmt::Debug for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, r#"{{"color": {:?}, "v": "{:?}"}}"#, self.color, self.v)
     }
 }
 
@@ -94,7 +103,9 @@ impl DeviceRegistry {
     ///     - (2)を適用
     pub fn insert(&mut self, device: IoTDevice) {
         let new_node = self.insert_internal(device);
-        self.root = self.fix_tree(new_node);
+        debug!("--- start balancing {:?}", new_node.borrow().v);
+        self.root = self.balance(new_node.clone());
+        debug!("--- end balancing {:?}", new_node.borrow().v);
     }
 
     fn pair(
@@ -161,7 +172,7 @@ impl DeviceRegistry {
         self.length += 1;
         let maybe_root = mem::replace(&mut self.root, None);
         let (maybe_root, new_node) = self.insert_rec(maybe_root.clone(), device);
-        // println!("{:?} {:?}", &maybe_node, &new_node);
+        debug!("new_root: {:?}, new_node: {:?}", &maybe_root, &new_node);
         self.root = maybe_root;
         new_node.clone()
     }
@@ -226,15 +237,23 @@ impl DeviceRegistry {
         }
     }
 
-    fn fix_tree(&mut self, inserted: Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
+    fn balance(&mut self, inserted: Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
         let mut current_is_not_root = !inserted.borrow().is_root();
 
         let root = if current_is_not_root {
             let mut parent_is_red = self.parent_color(&inserted) == Color::Red;
             let mut current = inserted.clone();
+            debug!(
+                "inserted node {:?} is not root, start balancing..",
+                inserted.borrow().v
+            );
+
+            debug!("parent is {:?}", self.parent_or_panic(&inserted),);
             while parent_is_red && current_is_not_root {
+                debug!("current: {:?}", current.borrow().v);
                 let grand_parent = current.borrow().parent.as_ref().unwrap().clone();
                 let Some((maybe_uncle, which)) = self.uncle(current.clone()) else {
+                    debug!("current does not have grand parent");
                     break;
                 };
                 let mut parent = self.parent_or_panic(&current);
@@ -246,14 +265,17 @@ impl DeviceRegistry {
                     //         current-> o
                     RedBlackOp::LeftNode => {
                         // uncle is on the left
+                        debug!("uncle is left child");
                         match maybe_uncle {
                             Some(ref uncle) if uncle.borrow().color == Color::Red => {
+                                debug!("uncle is red");
                                 parent.borrow_mut().switch_color(Color::Black);
                                 uncle.borrow_mut().switch_color(Color::Black);
                                 grand_parent.borrow_mut().switch_color(Color::Red);
                                 current = grand_parent;
                             }
                             Some(_) | None => {
+                                debug!("uncle is black or None");
                                 if self.decide_direction(&parent.borrow().v, &current.borrow().v)
                                     == RedBlackOp::LeftNode
                                 {
@@ -283,20 +305,23 @@ impl DeviceRegistry {
                     }
                     //                 o  <- grand_parent
                     //                / \
-                    //       uncle-> o   o <- parent
-                    //                   |
-                    //         current-> o
+                    //       parent-> o o <- uncle
+                    //                |
+                    //      current-> o
                     RedBlackOp::RightNode => {
                         // uncle is on the right
+                        debug!("uncle is left child");
 
                         match maybe_uncle {
                             Some(ref uncle) if uncle.borrow().color == Color::Red => {
+                                debug!("uncle is red");
                                 parent.borrow_mut().switch_color(Color::Black);
                                 uncle.borrow_mut().switch_color(Color::Black);
                                 grand_parent.borrow_mut().switch_color(Color::Red);
                                 current = grand_parent;
                             }
                             Some(_) | None => {
+                                debug!("uncle is black or None");
                                 if self.decide_direction(&parent.borrow().v, &current.borrow().v)
                                     == RedBlackOp::RightNode
                                 {
@@ -326,15 +351,17 @@ impl DeviceRegistry {
                     parent_is_red = self.parent_color(&current) == Color::Red;
                 }
             }
-            while current.borrow().is_root() {
+            while !current.borrow().is_root() {
                 current = self.parent_or_panic(&current);
             }
             Some(current)
         } else {
+            debug!("new node {:?} is root", inserted.borrow().v);
             Some(inserted)
         };
         root.map(|node| {
-            node.borrow_mut().color = Color::Black;
+            debug!("root ({:?}) color changed to black", node.borrow().v);
+            node.borrow_mut().set_color(Color::Black);
             node
         })
     }
