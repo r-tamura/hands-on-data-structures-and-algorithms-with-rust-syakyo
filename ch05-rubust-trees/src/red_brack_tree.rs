@@ -44,14 +44,6 @@ impl Node {
         self.parent.is_none()
     }
 
-    pub fn expect_left(&self) -> Rc<RefCell<Node>> {
-        self.left.clone().unwrap()
-    }
-
-    pub fn expect_right(&self) -> Rc<RefCell<Node>> {
-        self.right.clone().unwrap()
-    }
-
     pub fn switch_color(&mut self, color: Color) {
         assert!(
             self.color != color,
