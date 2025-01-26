@@ -34,3 +34,9 @@ impl Ord for IoTDevice {
         self.partial_cmp(other).unwrap()
     }
 }
+
+impl std::fmt::Display for IoTDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.numeriacl_id)
+    }
+}
