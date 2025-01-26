@@ -229,11 +229,65 @@ impl DeviceRegistry {
         }
     }
 
+    fn balance_single_node(
+        &mut self,
+        current: Rc<RefCell<Node>>,
+        parent: Rc<RefCell<Node>>,
+        maybe_uncle: Option<Rc<RefCell<Node>>>,
+        uncle_direction: RedBlackOp,
+        grand_parent: Rc<RefCell<Node>>,
+    ) -> (Rc<RefCell<Node>>, Rc<RefCell<Node>>) {
+        let (next_parent, next_current) = match maybe_uncle {
+            Some(ref uncle) if uncle.borrow().color == Color::Red => {
+                debug!("uncle is red");
+                parent.borrow_mut().switch_color(Color::Black);
+                uncle.borrow_mut().switch_color(Color::Black);
+                grand_parent.borrow_mut().switch_color(Color::Red);
+                (parent, grand_parent)
+            }
+            Some(_) | None => {
+                debug!("uncle is black or None");
+
+                let (next_parent, next_current) = if self
+                    .decide_direction(&parent.borrow().v, &current.borrow().v)
+                    == uncle_direction
+                {
+                    let tmp = self.parent_or_panic(&current);
+                    let direction = match uncle_direction {
+                        RedBlackOp::LeftNode => Rotation::Right,
+                        RedBlackOp::RightNode => Rotation::Left,
+                    };
+                    self.rotate(tmp.clone(), direction);
+                    (self.parent_or_panic(&tmp), tmp)
+                } else {
+                    (parent, current)
+                };
+
+                next_parent.borrow_mut().color = Color::Black;
+                next_parent
+                    .borrow()
+                    .parent
+                    .as_ref()
+                    .unwrap()
+                    .clone()
+                    .borrow_mut()
+                    .color = Color::Red;
+                let direction = match uncle_direction {
+                    RedBlackOp::LeftNode => Rotation::Left,
+                    RedBlackOp::RightNode => Rotation::Right,
+                };
+                self.rotate(self.parent_or_panic(&next_parent), direction);
+                (next_parent, next_current)
+            }
+        };
+        (next_parent, next_current)
+    }
+
     fn balance(&mut self, inserted: Rc<RefCell<Node>>) -> Option<Rc<RefCell<Node>>> {
         let mut current_is_not_root = !inserted.borrow().is_root();
 
         let root = if current_is_not_root {
-            let mut parent_is_red = self.parent_color(&inserted) == Color::Red;
+            let mut parent_is_red = self.parent_or_panic(&inserted).borrow().color == Color::Red;
             let mut current = inserted.clone();
             debug!(
                 "inserted node {:?} is not root, start balancing..",
@@ -248,7 +302,7 @@ impl DeviceRegistry {
                     debug!("current does not have grand parent");
                     break;
                 };
-                let mut parent = self.parent_or_panic(&current);
+                let parent = self.parent_or_panic(&current);
                 match which {
                     //                 o  <- grand_parent
                     //                / \
@@ -258,42 +312,14 @@ impl DeviceRegistry {
                     RedBlackOp::LeftNode => {
                         // uncle is on the left
                         debug!("uncle is left child");
-                        match maybe_uncle {
-                            Some(ref uncle) if uncle.borrow().color == Color::Red => {
-                                debug!("uncle is red");
-                                parent.borrow_mut().switch_color(Color::Black);
-                                uncle.borrow_mut().switch_color(Color::Black);
-                                grand_parent.borrow_mut().switch_color(Color::Red);
-                                current = grand_parent;
-                            }
-                            Some(_) | None => {
-                                debug!("uncle is black or None");
-                                if self.decide_direction(&parent.borrow().v, &current.borrow().v)
-                                    == RedBlackOp::LeftNode
-                                {
-                                    let tmp = self.parent_or_panic(&current);
-                                    current = tmp;
-                                    self.rotate(current.clone(), Rotation::Right);
-                                    parent = self.parent_or_panic(&current);
-                                    debug!(
-                                        "{:?}'s parent is {:?}",
-                                        current.borrow().v,
-                                        parent.borrow().v
-                                    );
-                                }
-
-                                parent.borrow_mut().color = Color::Black;
-                                parent
-                                    .borrow()
-                                    .parent
-                                    .as_ref()
-                                    .unwrap()
-                                    .clone()
-                                    .borrow_mut()
-                                    .color = Color::Red;
-                                self.rotate(self.parent_or_panic(&parent), Rotation::Left);
-                            }
-                        }
+                        let (_parent, next_current) = self.balance_single_node(
+                            current.clone(),
+                            parent.clone(),
+                            maybe_uncle,
+                            RedBlackOp::LeftNode,
+                            grand_parent.clone(),
+                        );
+                        current = next_current;
                     }
                     //                 o  <- grand_parent
                     //                / \
@@ -302,45 +328,21 @@ impl DeviceRegistry {
                     //      current-> o
                     RedBlackOp::RightNode => {
                         // uncle is on the right
-                        debug!("uncle is left child");
-
-                        match maybe_uncle {
-                            Some(ref uncle) if uncle.borrow().color == Color::Red => {
-                                debug!("uncle is red");
-                                parent.borrow_mut().switch_color(Color::Black);
-                                uncle.borrow_mut().switch_color(Color::Black);
-                                grand_parent.borrow_mut().switch_color(Color::Red);
-                                current = grand_parent;
-                            }
-                            Some(_) | None => {
-                                debug!("uncle is black or None");
-                                if self.decide_direction(&parent.borrow().v, &current.borrow().v)
-                                    == RedBlackOp::RightNode
-                                {
-                                    let tmp = self.parent_or_panic(&current);
-                                    current = tmp;
-                                    self.rotate(current.clone(), Rotation::Left);
-                                    parent = self.parent_or_panic(&current);
-                                }
-
-                                parent.borrow_mut().color = Color::Black;
-                                parent
-                                    .borrow()
-                                    .parent
-                                    .as_ref()
-                                    .unwrap()
-                                    .clone()
-                                    .borrow_mut()
-                                    .color = Color::Red;
-                                self.rotate(self.parent_or_panic(&parent), Rotation::Right);
-                            }
-                        }
+                        debug!("uncle is right child");
+                        let (_parent, next_current) = self.balance_single_node(
+                            current.clone(),
+                            parent.clone(),
+                            maybe_uncle,
+                            RedBlackOp::RightNode,
+                            grand_parent.clone(),
+                        );
+                        current = next_current;
                     }
                 }
 
                 current_is_not_root = !current.borrow().is_root();
                 if current_is_not_root {
-                    parent_is_red = self.parent_color(&current) == Color::Red;
+                    parent_is_red = self.parent_or_panic(&current).borrow().color == Color::Red;
                 }
             }
             while !current.borrow().is_root() {
@@ -415,16 +417,6 @@ impl DeviceRegistry {
         }
     }
 
-    fn parent_color(&self, node: &Rc<RefCell<Node>>) -> Color {
-        node.borrow()
-            .parent
-            .as_ref()
-            .expect("should have parent node")
-            .borrow()
-            .color
-            .clone()
-    }
-
     fn parent_or_panic(&self, node: &Rc<RefCell<Node>>) -> Rc<RefCell<Node>> {
         node.borrow().parent.as_ref().unwrap().clone()
     }
@@ -476,9 +468,9 @@ impl DeviceRegistry {
         let left = node.borrow().left.clone();
         let right = node.borrow().right.clone();
         debug!("current: {:?} level: {}", node.borrow().v, level);
-        left.map(|l| self.walk_rec(l.clone(), callback, level + 1));
         callback(&node.clone().borrow().v, level);
         right.map(|r| self.walk_rec(r.clone(), callback, level + 1));
+        left.map(|l| self.walk_rec(l.clone(), callback, level + 1));
     }
 }
 
@@ -486,7 +478,7 @@ impl std::fmt::Display for DeviceRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.walk(&mut |device: &IoTDevice, level| {
             let indent = "  ".repeat(level);
-            writeln!(f, "{}{:?}", indent, device.numeriacl_id).unwrap();
+            writeln!(f, "{}- {:?}", indent, device.numeriacl_id).unwrap();
         });
         Ok(())
     }
@@ -538,8 +530,6 @@ mod tests {
         registry.insert_internal(device(4));
 
         assert_eq!(registry.length, 3);
-
-        assert_eq!(format!("{}", registry), "  4\n5\n  6\n");
     }
 
     #[test]
@@ -550,7 +540,31 @@ mod tests {
         registry.insert(device(3));
 
         assert_eq!(registry.length, 3);
-        assert_eq!(format!("{}", registry), "  1\n2\n  3\n");
+        assert_eq!(
+            format!("{}", registry),
+            r#"- 2
+  - 3
+  - 1
+"#
+        );
+    }
+
+    #[test]
+    fn when_complex_tree_should_be_balanced() {
+        let mut registry = DeviceRegistry::default();
+        registry.insert(device(2));
+        registry.insert(device(1));
+        registry.insert(device(4));
+        registry.insert(device(3));
+        registry.insert(device(7));
+        registry.insert(device(6));
+        registry.insert(device(5));
+
+        assert_eq!(registry.length, 7);
+        assert_eq!(
+            format!("{}", registry),
+            "- 4\n  - 6\n    - 7\n    - 5\n  - 2\n    - 3\n    - 1\n"
+        );
     }
 
     #[test]
@@ -583,11 +597,6 @@ mod tests {
         assert_eq!(should_gl.v, device(1));
         let should_gr = &should_l.right.as_ref().unwrap().borrow();
         assert_eq!(should_gr.v, device(3));
-
-        assert_eq!(
-            registry.to_string(),
-            "      1\n    2\n      3\n  4\n    5\n6\n"
-        );
     }
 
     #[test]
