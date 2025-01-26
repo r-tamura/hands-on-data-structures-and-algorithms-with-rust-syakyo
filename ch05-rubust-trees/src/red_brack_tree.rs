@@ -445,12 +445,25 @@ impl DeviceRegistry {
         uncle_and_which
     }
 
-    pub fn find(&self, _value: u64) -> Option<IoTDevice> {
-        todo!();
+    pub fn find(&self, value: u64) -> Option<IoTDevice> {
+        let root = self.root.as_ref()?.clone();
+        self.find_rec(&root, value)
     }
 
-    pub fn find_rec(&self) {
-        todo!();
+    fn find_rec(&self, current: &Rc<RefCell<Node>>, value: u64) -> Option<IoTDevice> {
+        match current.borrow().v.numeriacl_id.cmp(&value) {
+            std::cmp::Ordering::Less => current
+                .borrow()
+                .right
+                .as_ref()
+                .and_then(|r| self.find_rec(r, value)),
+            std::cmp::Ordering::Greater => current
+                .borrow()
+                .left
+                .as_ref()
+                .and_then(|l| self.find_rec(l, value)),
+            std::cmp::Ordering::Equal => Some(current.borrow().v.clone()),
+        }
     }
 
     pub fn walk(&self, mut callback: impl FnMut(&IoTDevice, usize)) {
@@ -836,5 +849,33 @@ mod tests {
         assert_eq!(new_nl.borrow().v, l);
         let new_nr = new_rl.borrow().right.as_ref().unwrap().clone();
         assert_eq!(new_nr.borrow().v, gl);
+    }
+
+    #[test]
+    fn when_only_root_node_and_search_value_exists_then_returns_the_matched_element() {
+        let mut registry = DeviceRegistry::default();
+        registry.insert(device(5));
+        let result = registry.find(5);
+        assert_eq!(result, Some(device(5)));
+    }
+
+    #[test]
+    fn when_some_nodes_and_search_value_exists_then_returns_the_matched_element() {
+        let mut registry = DeviceRegistry::default();
+        registry.insert(device(5));
+        registry.insert(device(6));
+        registry.insert(device(4));
+        let result = registry.find(6);
+        assert_eq!(result, Some(device(6)));
+    }
+
+    #[test]
+    fn when_threre_are_some_nodes_and_search_value_does_not_exist_then_returns_none() {
+        let mut registry = DeviceRegistry::default();
+        registry.insert(device(5));
+        registry.insert(device(6));
+        registry.insert(device(4));
+        let result = registry.find(7);
+        assert_eq!(result, None);
     }
 }
