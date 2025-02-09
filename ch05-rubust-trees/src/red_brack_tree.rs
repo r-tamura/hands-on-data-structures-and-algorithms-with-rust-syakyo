@@ -1,5 +1,5 @@
 use log::debug;
-use std::{cell::RefCell, mem, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Color {
@@ -81,6 +81,9 @@ where
     pub length: u64,
 }
 
+type Tree<T> = Rc<RefCell<Node<T>>>;
+type MaybeTree<T> = Option<Tree<T>>;
+
 impl<T: std::fmt::Debug + std::fmt::Display + Clone + Eq + Ord> DeviceRegistry<T> {
     /// ノードの挿入
     /// - 挿入フェーズ
@@ -158,7 +161,7 @@ impl<T: std::fmt::Debug + std::fmt::Display + Clone + Eq + Ord> DeviceRegistry<T
 
     fn insert_internal(&mut self, value: T) -> Rc<RefCell<Node<T>>> {
         self.length += 1;
-        let maybe_root = mem::replace(&mut self.root, None);
+        let maybe_root = self.root.take();
         let (maybe_root, new_node) = self.insert_rec(maybe_root.clone(), value);
         debug!("new_root: {:?}, new_node: {:?}", &maybe_root, &new_node);
         self.root = maybe_root;
@@ -169,7 +172,7 @@ impl<T: std::fmt::Debug + std::fmt::Display + Clone + Eq + Ord> DeviceRegistry<T
         &mut self,
         mut maybe_current_node: Option<Rc<RefCell<Node<T>>>>,
         value: T,
-    ) -> (Option<Rc<RefCell<Node<T>>>>, Rc<RefCell<Node<T>>>) {
+    ) -> (MaybeTree<T>, Rc<RefCell<Node<T>>>) {
         match maybe_current_node.take() {
             None => {
                 // 葉に到達したので、新しいノードを追加
@@ -229,7 +232,7 @@ impl<T: std::fmt::Debug + std::fmt::Display + Clone + Eq + Ord> DeviceRegistry<T
         maybe_uncle: Option<Rc<RefCell<Node<T>>>>,
         uncle_direction: RedBlackOp,
         grand_parent: Rc<RefCell<Node<T>>>,
-    ) -> (Rc<RefCell<Node<T>>>, Rc<RefCell<Node<T>>>) {
+    ) -> (Tree<T>, Tree<T>) {
         let (next_parent, next_current) = match maybe_uncle {
             Some(ref uncle) if uncle.borrow().color == Color::Red => {
                 debug!("uncle is red");
@@ -346,10 +349,9 @@ impl<T: std::fmt::Debug + std::fmt::Display + Clone + Eq + Ord> DeviceRegistry<T
             debug!("new node {:?} is root", inserted.borrow().v);
             Some(inserted)
         };
-        root.map(|node| {
+        root.inspect(|node| {
             debug!("root ({:?}) color changed to black", node.borrow().v);
             node.borrow_mut().set_color(Color::Black);
-            node
         })
     }
 
@@ -420,12 +422,9 @@ impl<T: std::fmt::Debug + std::fmt::Display + Clone + Eq + Ord> DeviceRegistry<T
 
     /// uncleノードを取得
     /// which:
-    fn uncle(
-        &self,
-        node: Rc<RefCell<Node<T>>>,
-    ) -> Option<(Option<Rc<RefCell<Node<T>>>>, RedBlackOp)> {
-        let parent = (&node.borrow().parent).clone()?;
-        let grand_parent = (&parent.borrow().parent).clone()?;
+    fn uncle(&self, node: Rc<RefCell<Node<T>>>) -> Option<(MaybeTree<T>, RedBlackOp)> {
+        let parent = (node.borrow().parent).clone()?;
+        let grand_parent = (parent.borrow().parent).clone()?;
         // 親ノードが祖父ノードのある方向にある場合、uncleノードは親ノードの反対側になる
         let uncle_and_which =
             match self.decide_direction(&grand_parent.borrow().v, &parent.borrow().v) {
@@ -443,43 +442,38 @@ impl<T: std::fmt::Debug + std::fmt::Display + Clone + Eq + Ord> DeviceRegistry<T
 
     pub fn find(&self, value: T) -> Option<T> {
         let root = self.root.as_ref()?.clone();
-        self.find_rec(&root, value)
+        Self::find_rec(&root, value)
     }
 
-    fn find_rec(&self, current: &Rc<RefCell<Node<T>>>, value: T) -> Option<T> {
+    fn find_rec(current: &Rc<RefCell<Node<T>>>, value: T) -> Option<T> {
         match current.borrow().v.cmp(&value) {
             std::cmp::Ordering::Less => current
                 .borrow()
                 .right
                 .as_ref()
-                .and_then(|r| self.find_rec(r, value)),
+                .and_then(|r| Self::find_rec(r, value)),
             std::cmp::Ordering::Greater => current
                 .borrow()
                 .left
                 .as_ref()
-                .and_then(|l| self.find_rec(l, value)),
+                .and_then(|l| Self::find_rec(l, value)),
             std::cmp::Ordering::Equal => Some(current.borrow().v.clone()),
         }
     }
 
     pub fn walk(&self, mut callback: impl FnMut(&T, usize)) {
-        self.root.as_ref().map(|root| {
-            self.walk_rec(root.clone(), &mut callback, 0);
+        self.root.as_ref().inspect(|&root| {
+            Self::walk_rec(root.clone(), &mut callback, 0);
         });
     }
 
-    fn walk_rec(
-        &self,
-        node: Rc<RefCell<Node<T>>>,
-        callback: &mut impl FnMut(&T, usize),
-        level: usize,
-    ) {
+    fn walk_rec(node: Rc<RefCell<Node<T>>>, callback: &mut impl FnMut(&T, usize), level: usize) {
         let left = node.borrow().left.clone();
         let right = node.borrow().right.clone();
         debug!("current: {:?} level: {}", node.borrow().v, level);
         callback(&node.clone().borrow().v, level);
-        right.map(|r| self.walk_rec(r.clone(), callback, level + 1));
-        left.map(|l| self.walk_rec(l.clone(), callback, level + 1));
+        right.inspect(|r| Self::walk_rec(r.clone(), callback, level + 1));
+        left.inspect(|l| Self::walk_rec(l.clone(), callback, level + 1));
     }
 }
 
