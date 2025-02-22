@@ -1,10 +1,8 @@
-use log::debug;
-
 use crate::MessageNotification;
 
 #[derive(Default)]
 pub struct MessageChecker {
-    heap: HeapTree,
+    heap: HeapTree<MessageNotification>,
 }
 
 impl MessageChecker {
@@ -21,12 +19,18 @@ impl MessageChecker {
     }
 }
 
-#[derive(Default, Debug)]
-struct HeapTree {
-    heap: Vec<MessageNotification>,
+#[derive(Debug)]
+struct HeapTree<T: Ord> {
+    heap: Vec<T>,
 }
 
-impl HeapTree {
+impl<T: Ord> Default for HeapTree<T> {
+    fn default() -> Self {
+        HeapTree { heap: Vec::new() }
+    }
+}
+
+impl<T: Ord> HeapTree<T> {
     fn parent(&self, index: usize) -> Option<usize> {
         if index == 0 {
             return None;
@@ -35,7 +39,7 @@ impl HeapTree {
     }
 
     fn is_higher_priority(&self, i1: usize, i2: usize) -> bool {
-        self.heap[i1].message_count >= self.heap[i2].message_count
+        self.heap[i1] >= self.heap[i2]
     }
 
     fn get_largest_child(&self, index: usize) -> usize {
@@ -64,14 +68,13 @@ impl HeapTree {
         self.heap.len()
     }
 
-    pub fn add(&mut self, notification: MessageNotification) {
+    pub fn add(&mut self, v: T) {
         // Vecへ追加
-        self.heap.push(notification);
+        self.heap.push(v);
 
         // ヒープ再構築
         // メッセージ数が多いデバイスを優先する
         self.bubble_up(self.length() - 1);
-        debug!("Heap: {:?}", self.heap);
     }
 
     pub fn bubble_down(&mut self, index: usize) {
@@ -88,14 +91,13 @@ impl HeapTree {
         }
     }
 
-    pub fn pop(&mut self) -> Option<MessageNotification> {
+    pub fn pop(&mut self) -> Option<T> {
         if self.length() == 0 {
             None
         } else {
             // vecの最後の要素が先頭に移動する
             let result = self.heap.swap_remove(0);
             self.bubble_down(1);
-            debug!("Heap After Bubble Down: {:?}", self.heap);
             Some(result)
         }
     }
