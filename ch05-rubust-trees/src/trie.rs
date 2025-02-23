@@ -1,39 +1,71 @@
+use log::debug;
 use std::collections::BTreeMap;
 
-use log::debug;
+enum InsertResult<V> {
+    Added,
+    Updated(V),
+}
 
-#[derive(Default)]
-struct TrieNode<V> {
-    key: char,
-    next: BTreeMap<char, TrieNode<V>>,
-    /// 登録済みのキーのパスとして存在していた場合にvalueはNoneとなる
-    value: Option<V>,
+enum TrieNode<V> {
+    /// 中間ノード。文字列の途中の文字を表し、値は持たない
+    Internal {
+        next: BTreeMap<char, Box<TrieNode<V>>>,
+    },
+    /// 終端ノード。文字列の最後の文字を表し、値を持つ
+    Leaf {
+        value: V,
+        next: BTreeMap<char, Box<TrieNode<V>>>,
+    },
 }
 
 impl<V> TrieNode<V> {
-    fn new(key: char) -> Self {
-        Self {
-            key,
+    fn new_internal() -> Self {
+        Self::Internal {
             next: BTreeMap::new(),
-            value: None,
         }
     }
 
-    fn new_with_value(key: char, value: V) -> Self {
-        Self {
-            key,
-            next: BTreeMap::new(),
-            value: Some(value),
+    fn next(&self) -> &BTreeMap<char, Box<TrieNode<V>>> {
+        match self {
+            Self::Internal { next, .. } => next,
+            Self::Leaf { next, .. } => next,
         }
     }
 
-    fn replace_value(&mut self, value: V) -> Option<V> {
-        self.value.replace(value)
+    fn next_mut(&mut self) -> &mut BTreeMap<char, Box<TrieNode<V>>> {
+        match self {
+            Self::Internal { next, .. } => next,
+            Self::Leaf { next, .. } => next,
+        }
+    }
+
+    fn make_leaf(&mut self, value: V) -> InsertResult<V> {
+        match self {
+            Self::Internal { next } => {
+                let next = std::mem::take(next);
+                *self = Self::Leaf { value, next };
+                InsertResult::Added
+            }
+            Self::Leaf {
+                value: old_value, ..
+            } => {
+                let old = std::mem::replace(old_value, value);
+                InsertResult::Updated(old)
+            }
+        }
+    }
+
+    fn value(&self) -> Option<&V> {
+        match self {
+            Self::Internal { .. } => None,
+            Self::Leaf { value, .. } => Some(value),
+        }
     }
 }
+
 pub struct TrieTree<V> {
     length: usize,
-    root: BTreeMap<char, TrieNode<V>>,
+    root: BTreeMap<char, Box<TrieNode<V>>>,
 }
 
 impl<V> Default for TrieTree<V> {
@@ -57,74 +89,49 @@ impl<V> TrieTree<V> {
     pub fn add(&mut self, key: String, v: V) {
         assert!(!key.is_empty(), "key must not be empty");
         debug!("[trie::add] key: {}", key);
-        let first = key[0..1].chars().next().unwrap();
-        if key.len() == 1 {
-            let old_value = self.root.insert(first, TrieNode::new_with_value(first, v));
 
-            match old_value {
-                Some(TrieNode { value: Some(_), .. }) => {
-                    debug!("updated: {key}");
-                }
-                _ => {
-                    self.length += 1;
-                    debug!("added: {key}");
-                }
-            };
-            return;
-        }
-        let rest = &key[1..key.len() - 1];
-        let last = key.chars().last().unwrap();
-
+        let chars: Vec<char> = key.chars().collect();
         let mut current = self
             .root
-            .entry(first)
-            .or_insert_with(|| TrieNode::new(first));
-        for c in rest.chars() {
-            current = current.next.entry(c).or_insert_with(|| TrieNode::new(c));
+            .entry(chars[0])
+            .or_insert_with(|| Box::new(TrieNode::new_internal()));
+
+        for &c in chars[1..].iter() {
+            let next = current
+                .next_mut()
+                .entry(c)
+                .or_insert_with(|| Box::new(TrieNode::new_internal()));
+            current = next;
         }
 
-        let node = current
-            .next
-            .entry(last)
-            .or_insert_with(|| TrieNode::new(last));
-
-        let old_value = node.replace_value(v);
-        match old_value {
-            Some(_) => {
-                debug!("updated: {key}");
-            }
-            _ => {
+        let result = current.make_leaf(v);
+        match result {
+            InsertResult::Added => {
                 self.length += 1;
                 debug!("added: {key}");
             }
+            InsertResult::Updated(_) => debug!("updated: {key}"),
         }
     }
 
-    /// 指定した文字列keyに完全一致する値を取得します
     pub fn find(&self, s: &str) -> Option<&V> {
         debug!("[trie::find] s: {}", s);
-        let first = s[0..1].chars().next().unwrap();
-        if s.len() == 1 {
-            return self.root.get(&first).and_then(|node| node.value.as_ref());
-        }
-        let rest = &s[1..s.len() - 1];
-        let last = s.chars().last().unwrap();
+        let chars: Vec<char> = s.chars().collect();
 
-        let mut current = self.root.get(&first)?;
-        debug!("first: {}", first);
-        for c in rest.chars() {
-            debug!("c: {}", c);
-            current = current.next.get(&c)?;
+        if chars.is_empty() {
+            return None;
         }
-        debug!(
-            "last: {} {:?}",
-            last,
-            current.next.keys().collect::<Vec<&char>>()
-        );
-        current.next.get(&last).and_then(|node| node.value.as_ref())
+
+        let mut current = self.root.get(&chars[0])?;
+
+        for &c in chars[1..].iter() {
+            current = current.next().get(&c)?;
+        }
+
+        current.value()
     }
 
-    pub fn remove(&mut self, key: &str) {
-        todo!();
+    pub fn remove(&mut self, _key: &str) -> Option<V> {
+        todo!()
     }
 }
