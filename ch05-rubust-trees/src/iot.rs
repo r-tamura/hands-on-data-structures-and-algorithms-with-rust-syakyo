@@ -94,11 +94,16 @@ impl DeviceRegistry {
 mod tests {
     use super::*;
 
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
     mod device_registry {
         use super::*;
         #[test]
-        fn device_registry_add_single_char_device() {
+        fn add_single_char_name_device() {
             // Arrange
+            init();
             let mut registry = DeviceRegistry::default();
 
             // Act
@@ -107,6 +112,67 @@ mod tests {
             // Assert
             assert_eq!(registry.length(), 1);
             assert_eq!(registry.find("a").unwrap().numeriacl_id, 1);
+        }
+
+        #[test]
+        fn should_add_multiple_char_name_device() {
+            // Arrange
+            init();
+            let mut registry = DeviceRegistry::default();
+
+            // Act
+            registry.add(IoTDevice::new(1, "", "abc"));
+
+            // Assert
+            assert_eq!(registry.length(), 1);
+            assert_eq!(registry.find("abc").unwrap().numeriacl_id, 1);
+        }
+
+        #[test]
+        fn when_same_key_passed_should_update_with_new_device() {
+            // Arrange
+            init();
+            let mut registry = DeviceRegistry::default();
+            registry.add(IoTDevice::new(1, "", "abc"));
+
+            // Act
+            registry.add(IoTDevice::new(2, "", "abc"));
+
+            // Assert
+            assert_eq!(registry.length(), 1);
+            assert_eq!(registry.find("abc").unwrap().numeriacl_id, 2);
+        }
+
+        #[test]
+        fn when_same_prefixed_key_paased_should_add_new_device() {
+            // Arrange
+            init();
+            let mut registry = DeviceRegistry::default();
+            registry.add(IoTDevice::new(1, "", "abc"));
+
+            // Act
+            registry.add(IoTDevice::new(2, "", "ab"));
+
+            // Assert
+            assert_eq!(registry.length(), 2);
+            assert_eq!(registry.find("abc").unwrap().numeriacl_id, 1);
+            assert_eq!(registry.find("ab").unwrap().numeriacl_id, 2);
+        }
+
+        #[test]
+        fn when_same_prefixed_but_different_key_passed_should_add_new_device() {
+            // Arrange
+            init();
+            let mut registry = DeviceRegistry::default();
+            registry.add(IoTDevice::new(1, "", "abc"));
+
+            // Act
+            registry.add(IoTDevice::new(2, "", "abx"));
+
+            // Assert
+            assert_eq!(registry.length(), 2);
+            assert_eq!(registry.find("abc").unwrap().numeriacl_id, 1);
+            assert_eq!(registry.find("abx").unwrap().numeriacl_id, 2);
         }
     }
 }
