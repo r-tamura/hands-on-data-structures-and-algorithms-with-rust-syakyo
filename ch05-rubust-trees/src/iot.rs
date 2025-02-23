@@ -66,3 +66,47 @@ impl Ord for MessageNotification {
         self.partial_cmp(other).unwrap()
     }
 }
+
+#[derive(Default)]
+pub struct DeviceRegistry {
+    trie: crate::trie::TrieTree<IoTDevice>,
+}
+
+impl DeviceRegistry {
+    pub fn add(&mut self, device: IoTDevice) {
+        self.trie.add(device.path.clone(), device);
+    }
+
+    pub fn find(&self, path: &str) -> Option<&IoTDevice> {
+        self.trie.find(path)
+    }
+
+    pub fn remove(&mut self, path: &str) {
+        self.trie.remove(path);
+    }
+
+    pub fn length(&self) -> usize {
+        self.trie.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod device_registry {
+        use super::*;
+        #[test]
+        fn device_registry_add_single_char_device() {
+            // Arrange
+            let mut registry = DeviceRegistry::default();
+
+            // Act
+            registry.add(IoTDevice::new(1, "", "a"));
+
+            // Assert
+            assert_eq!(registry.length(), 1);
+            assert_eq!(registry.find("a").unwrap().numeriacl_id, 1);
+        }
+    }
+}
