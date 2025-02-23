@@ -1,4 +1,4 @@
-use crate::MessageNotification;
+use crate::iot::MessageNotification;
 
 #[derive(Default)]
 pub struct MessageChecker {
@@ -125,7 +125,7 @@ mod tests {
     fn test_single_notification() {
         init();
         let mut checker = MessageChecker::default();
-        let device = crate::IoTDevice::new(1, "", "");
+        let device = crate::iot::IoTDevice::new(1, "", "");
         checker.add(MessageNotification::new(1, device));
         assert_eq!(checker.length(), 1);
         let notification = checker.pop();
@@ -137,7 +137,7 @@ mod tests {
     fn test_multiple_notifications() {
         init();
         let mut checker = MessageChecker::default();
-        let device = crate::IoTDevice::new(1, "", "");
+        let device = crate::iot::IoTDevice::new(1, "", "");
         checker.add(MessageNotification::new(1, device.clone()));
         checker.add(MessageNotification::new(2, device.clone()));
         checker.add(MessageNotification::new(3, device.clone()));

@@ -502,7 +502,7 @@ impl<T: std::fmt::Debug + std::fmt::Display + Clone + Eq + Ord> Default for Devi
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use crate::IoTDevice;
+    use crate::iot::IoTDevice;
 
     use super::{DeviceRegistry, Node};
 
