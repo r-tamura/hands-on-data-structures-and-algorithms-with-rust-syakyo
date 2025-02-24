@@ -8,11 +8,43 @@ enum InsertResult<V> {
 
 enum TrieNode<V> {
     /// 中間ノード。文字列の途中の文字を表し、値は持たない
+    ///
+    /// 例: "rust"と"rust-lang"という文字列を格納する場合
+    /// 'r', 'u', 's'の各文字はInternalノード
+    ///
+    /// ```text
+    /// [I] = Internal node (値なし)
+    /// [E] = Entry node (値あり、他の文字への参照も持ちうる)
+    ///
+    ///      r[I]
+    ///      |
+    ///      u[I]
+    ///      |
+    ///      s[I]
+    ///      |
+    ///      t[E]  <- "rust"の終端。同時に"rust-lang"の途中の文字
+    ///      |
+    ///      -[I]
+    ///      |
+    ///      l[I]
+    ///      |
+    ///      a[I]
+    ///      |
+    ///      n[I]
+    ///      |
+    ///      g[E]  <- "rust-lang"の終端
+    /// ```
     Internal {
         next: BTreeMap<char, Box<TrieNode<V>>>,
     },
-    /// 終端ノード。文字列の最後の文字を表し、値を持つ
-    Leaf {
+    /// エントリーノード。文字列の最後の文字を表し、値を持つ。
+    /// 他の文字列の途中の文字である可能性があるため、nextも持つ
+    ///
+    /// 例: "rust"と"rust-lang"という文字列を格納する場合
+    /// - t[E] はEntryノード（"rust"のエントリー）であり、同時に"rust-lang"の途中の文字
+    ///   なので、'-'への参照も持つ
+    /// - g[E] はEntryノード（"rust-lang"のエントリー）でnextは空
+    Entry {
         value: V,
         next: BTreeMap<char, Box<TrieNode<V>>>,
     },
@@ -27,26 +59,26 @@ impl<V> TrieNode<V> {
 
     fn next(&self) -> &BTreeMap<char, Box<TrieNode<V>>> {
         match self {
-            Self::Internal { next, .. } => next,
-            Self::Leaf { next, .. } => next,
+            Self::Internal { next } => next,
+            Self::Entry { next, .. } => next,
         }
     }
 
     fn next_mut(&mut self) -> &mut BTreeMap<char, Box<TrieNode<V>>> {
         match self {
-            Self::Internal { next, .. } => next,
-            Self::Leaf { next, .. } => next,
+            Self::Internal { next } => next,
+            Self::Entry { next, .. } => next,
         }
     }
 
-    fn make_leaf(&mut self, value: V) -> InsertResult<V> {
+    fn make_entry(&mut self, value: V) -> InsertResult<V> {
         match self {
             Self::Internal { next } => {
                 let next = std::mem::take(next);
-                *self = Self::Leaf { value, next };
+                *self = Self::Entry { value, next };
                 InsertResult::Added
             }
-            Self::Leaf {
+            Self::Entry {
                 value: old_value, ..
             } => {
                 let old = std::mem::replace(old_value, value);
@@ -55,10 +87,25 @@ impl<V> TrieNode<V> {
         }
     }
 
+    fn make_internal(&mut self) -> Option<V> {
+        match self {
+            Self::Internal { .. } => None,
+            Self::Entry { next, .. } => {
+                let next = std::mem::take(next);
+                let temp = std::mem::replace(self, Self::Internal { next });
+                if let Self::Entry { value, .. } = temp {
+                    Some(value)
+                } else {
+                    unreachable!()
+                }
+            }
+        }
+    }
+
     fn value(&self) -> Option<&V> {
         match self {
             Self::Internal { .. } => None,
-            Self::Leaf { value, .. } => Some(value),
+            Self::Entry { value, .. } => Some(value),
         }
     }
 }
@@ -96,15 +143,29 @@ impl<V> TrieTree<V> {
             .entry(chars[0])
             .or_insert_with(|| Box::new(TrieNode::new_internal()));
 
-        for &c in chars[1..].iter() {
+        for (i, &c) in chars[1..].iter().enumerate() {
             let next = current
                 .next_mut()
                 .entry(c)
                 .or_insert_with(|| Box::new(TrieNode::new_internal()));
+
+            // 最後の文字の場合のみEntryに変換
+            if i == chars[1..].len() - 1 {
+                let result = next.make_entry(v);
+                match result {
+                    InsertResult::Added => {
+                        self.length += 1;
+                        debug!("added: {key}");
+                    }
+                    InsertResult::Updated(_) => debug!("updated: {key}"),
+                }
+                return;
+            }
             current = next;
         }
 
-        let result = current.make_leaf(v);
+        // 1文字の場合はここでEntryに変換
+        let result = current.make_entry(v);
         match result {
             InsertResult::Added => {
                 self.length += 1;
@@ -131,9 +192,51 @@ impl<V> TrieTree<V> {
         current.value()
     }
 
+    /// キーに対応する値を削除します
+    ///
+    /// # 例
+    /// ```
+    /// # use ch05_rubust_trees::trie::TrieTree;
+    /// let mut trie = TrieTree::default();
+    /// trie.add("rust".to_string(), 1);
+    /// trie.add("rust-lang".to_string(), 2);
+    ///
+    /// assert_eq!(trie.remove("rust"), Some(1));  // "rust"を削除。"rust-lang"は保持
+    /// assert_eq!(trie.find("rust"), None);       // "rust"は見つからない
+    /// assert_eq!(trie.find("rust-lang"), Some(&2)); // "rust-lang"はまだ存在
+    /// ```
     pub fn remove(&mut self, key: &str) -> Option<V> {
         debug!("[trie::remove] key: {}", key);
-        None // TODO: implement remove functionality
+        if key.is_empty() {
+            return None;
+        }
+
+        let chars: Vec<char> = key.chars().collect();
+        let first = chars[0];
+        let mut current = self.root.get_mut(&first)?;
+
+        // 最後の一文字の場合
+        if chars.len() == 1 {
+            let value = current.make_internal()?;
+            self.length -= 1;
+            return Some(value);
+        }
+
+        // 2文字以上の場合は最後のノードまで移動
+        for &c in chars[1..chars.len() - 1].iter() {
+            current = current.next_mut().get_mut(&c)?;
+        }
+
+        // 最後の文字を削除
+        let last_char = chars[chars.len() - 1];
+        if let Some(last_node) = current.next_mut().get_mut(&last_char) {
+            if let Some(value) = last_node.make_internal() {
+                self.length -= 1;
+                return Some(value);
+            }
+        }
+
+        None
     }
 }
 
@@ -294,5 +397,39 @@ mod tests {
             let key = format!("key{}", i);
             assert_eq!(trie.find(&key).unwrap().id, i as u64);
         }
+    }
+
+    #[test]
+    fn remove_should_remove_key() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::default();
+        trie.add("abc".to_string(), TestValue::new(1));
+
+        // Act
+        let removed = trie.remove("abc");
+
+        // Assert
+        assert_eq!(trie.len(), 0);
+        assert_eq!(removed.unwrap().id, 1);
+        assert_eq!(trie.find("abc"), None);
+    }
+
+    #[test]
+    fn remove_should_keep_other_keys_with_same_prefix() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::default();
+        trie.add("rust".to_string(), TestValue::new(1));
+        trie.add("rust-lang".to_string(), TestValue::new(2));
+
+        // Act: "rust"を削除
+        let removed = trie.remove("rust");
+
+        // Assert: "rust"は削除され、"rust-lang"は保持される
+        assert_eq!(trie.len(), 1);
+        assert_eq!(removed.unwrap().id, 1);
+        assert_eq!(trie.find("rust"), None);
+        assert_eq!(trie.find("rust-lang").unwrap().id, 2);
     }
 }
