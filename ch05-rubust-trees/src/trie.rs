@@ -215,27 +215,19 @@ impl<V> TrieTree<V> {
         }
 
         let chars: Vec<char> = key.chars().collect();
-        let mut path: Vec<(usize, char)> = Vec::new();
 
-        // 最初の文字のノード取得
-        let first = chars[0];
-        let mut current = self.root.get_mut(&first)?;
-        path.push((0, first));
-
-        // ノードまで移動しつつパスを記録
-        for (i, &c) in chars[1..].iter().enumerate() {
-            current = current.next_mut().get_mut(&c)?;
-            path.push((i + 1, c));
-        }
-
-        // 最後のノードはEntryではなくなるため、Internalに変換
-        let value = current.take_value()?;
+        let last_node = self.get_last_node_mut(&chars)?;
+        let value = last_node.take_value()?;
+        let is_last_node_used = last_node.is_used();
         self.length -= 1;
 
         // 他の文字列でノードを使用中なので削除しない
-        if current.is_used() {
+        if is_last_node_used {
             return Some(value);
         }
+
+        // ノードまで移動しつつパスを記録
+        let path: Vec<(usize, char)> = chars.iter().enumerate().map(|(i, &c)| (i, c)).collect();
 
         // パスを逆順に走査し、未使用のノードを削除
         self.fix_tree(&chars, path);
@@ -252,6 +244,18 @@ impl<V> TrieTree<V> {
             let (_, removed) = self.remove_node(chars, i, chars[i]);
             can_remove_parent = removed;
         }
+    }
+
+    fn get_last_node_mut(&mut self, chars: &[char]) -> Option<&mut Box<TrieNode<V>>> {
+        if chars.is_empty() {
+            return None;
+        }
+
+        let mut current = self.root.get_mut(&chars[0])?;
+        for &c in chars[1..].iter() {
+            current = current.next_mut().get_mut(&c)?;
+        }
+        Some(current)
     }
 
     fn get_node_at_mut(&mut self, chars: &[char], index: usize) -> Option<&mut Box<TrieNode<V>>> {
@@ -495,6 +499,7 @@ mod tests {
         assert_eq!(trie.len(), 0);
         assert_eq!(removed.unwrap().id, 1);
         // 'r', 'u', 's', 't' のノードが全て削除されていることを確認
+        println!("{:?}", trie.root.keys());
         assert!(trie.root.is_empty());
     }
 
