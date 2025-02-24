@@ -111,12 +111,17 @@ impl<V> TrieNode<V> {
         }
     }
 
+    #[allow(dead_code)]
     fn is_internal(&self) -> bool {
         matches!(self, Self::Internal { .. })
     }
 
-    fn is_unused(&self) -> bool {
-        self.is_internal() && self.next().is_empty()
+    /// ノードが値を持つまたは他の文字列の途中の文字列の中間ノードとして使用されているとき、trueを返します
+    fn is_used(&self) -> bool {
+        match self {
+            Self::Internal { next } => !next.is_empty(),
+            Self::Entry { .. } => true,
+        }
     }
 }
 
@@ -227,24 +232,26 @@ impl<V> TrieTree<V> {
         let value = current.take_value()?;
         self.length -= 1;
 
-        // nextが空でなければ、他の文字列で使用中なのでノードを削除しない
-        if !current.next().is_empty() {
+        // 他の文字列でノードを使用中なので削除しない
+        if current.is_used() {
             return Some(value);
         }
 
         // パスを逆順に走査し、未使用のノードを削除
-        let mut can_remove_parent = true;
+        self.fix_tree(&chars, path);
 
-        for (i, c) in path.into_iter().rev() {
+        Some(value)
+    }
+
+    fn fix_tree(&mut self, chars: &[char], path: Vec<(usize, char)>) {
+        let mut can_remove_parent = true;
+        for i in (0..path.len()).rev() {
             if !can_remove_parent {
                 break;
             }
-            // 削除が失敗（None）の場合は、それ以上の削除を停止
-            let (_, removed) = self.remove_node(&chars, i, c);
+            let (_, removed) = self.remove_node(chars, i, chars[i]);
             can_remove_parent = removed;
         }
-
-        Some(value)
     }
 
     fn get_node_at_mut(&mut self, chars: &[char], index: usize) -> Option<&mut Box<TrieNode<V>>> {
@@ -262,7 +269,7 @@ impl<V> TrieTree<V> {
     fn remove_node(&mut self, chars: &[char], index: usize, c: char) -> (Option<V>, bool) {
         if index == 0 {
             if let Some(node) = self.root.get_mut(&c) {
-                if node.is_unused() {
+                if !node.is_used() {
                     let value = node.take_value();
                     self.root.remove(&c);
                     return (value, true);
@@ -270,7 +277,7 @@ impl<V> TrieTree<V> {
             }
         } else if let Some(parent) = self.get_node_at_mut(chars, index) {
             if let Some(node) = parent.next_mut().get_mut(&c) {
-                if node.is_unused() {
+                if !node.is_used() {
                     let value = node.take_value();
                     parent.next_mut().remove(&c);
                     return (value, true);
