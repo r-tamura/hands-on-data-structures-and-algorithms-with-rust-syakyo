@@ -143,28 +143,16 @@ impl<V> TrieTree<V> {
             .entry(chars[0])
             .or_insert_with(|| Box::new(TrieNode::new_internal()));
 
-        for (i, &c) in chars[1..].iter().enumerate() {
+        // 2文字目以降があれば処理
+        for &c in chars[1..].iter() {
             let next = current
                 .next_mut()
                 .entry(c)
                 .or_insert_with(|| Box::new(TrieNode::new_internal()));
-
-            // 最後の文字の場合のみEntryに変換
-            if i == chars[1..].len() - 1 {
-                let result = next.make_entry(v);
-                match result {
-                    InsertResult::Added => {
-                        self.length += 1;
-                        debug!("added: {key}");
-                    }
-                    InsertResult::Updated(_) => debug!("updated: {key}"),
-                }
-                return;
-            }
             current = next;
         }
 
-        // 1文字の場合はここでEntryに変換
+        // currentは常に最後の文字のノードを指している
         let result = current.make_entry(v);
         match result {
             InsertResult::Added => {
@@ -212,30 +200,61 @@ impl<V> TrieTree<V> {
         }
 
         let chars: Vec<char> = key.chars().collect();
+        let mut path: Vec<(usize, char)> = Vec::new();
+
+        // 最初の文字のノード取得
         let first = chars[0];
         let mut current = self.root.get_mut(&first)?;
+        path.push((0, first));
 
-        // 最後の一文字の場合
-        if chars.len() == 1 {
-            let value = current.make_internal()?;
+        // ノードまで移動しつつパスを記録
+        for (i, &c) in chars[1..].iter().enumerate() {
+            current = current.next_mut().get_mut(&c)?;
+            path.push((i + 1, c));
+        }
+
+        // 最後のノードをInternalに変換
+        if let Some(value) = current.make_internal() {
             self.length -= 1;
+
+            // 最後のノードのnextが空なら削除可能
+            if current.next().is_empty() {
+                // パスを逆順に走査し、未使用のノードを削除
+                let mut prev_empty = true;
+
+                for (i, c) in path.into_iter().rev() {
+                    if i == 0 {
+                        // ルートの場合
+                        if prev_empty {
+                            if let Some(node) = self.root.get(&c) {
+                                if node.next().is_empty() && node.value().is_none() {
+                                    self.root.remove(&c);
+                                }
+                            }
+                        }
+                        break;
+                    }
+
+                    // 親ノードを取得
+                    let mut parent = self.root.get_mut(&chars[0])?;
+                    for &pc in chars[1..i].iter() {
+                        parent = parent.next_mut().get_mut(&pc)?;
+                    }
+
+                    // 現在のノードを取得
+                    if let Some(node) = parent.next().get(&c) {
+                        // ノードが空（nextが空でvalueもない）なら削除対象
+                        if node.next().is_empty() && node.value().is_none() {
+                            parent.next_mut().remove(&c);
+                            prev_empty = true;
+                        } else {
+                            prev_empty = false;
+                        }
+                    }
+                }
+            }
             return Some(value);
         }
-
-        // 2文字以上の場合は最後のノードまで移動
-        for &c in chars[1..chars.len() - 1].iter() {
-            current = current.next_mut().get_mut(&c)?;
-        }
-
-        // 最後の文字を削除
-        let last_char = chars[chars.len() - 1];
-        if let Some(last_node) = current.next_mut().get_mut(&last_char) {
-            if let Some(value) = last_node.make_internal() {
-                self.length -= 1;
-                return Some(value);
-            }
-        }
-
         None
     }
 }
@@ -431,5 +450,73 @@ mod tests {
         assert_eq!(removed.unwrap().id, 1);
         assert_eq!(trie.find("rust"), None);
         assert_eq!(trie.find("rust-lang").unwrap().id, 2);
+    }
+
+    #[test]
+    fn remove_should_cleanup_unused_nodes() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::default();
+        trie.add("rust".to_string(), TestValue::new(1));
+
+        // Act: "rust"を削除
+        let removed = trie.remove("rust");
+
+        // Assert
+        assert_eq!(trie.len(), 0);
+        assert_eq!(removed.unwrap().id, 1);
+        // 'r', 'u', 's', 't' のノードが全て削除されていることを確認
+        assert!(trie.root.is_empty());
+    }
+
+    #[test]
+    fn remove_should_keep_nodes_used_by_other_keys() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::default();
+        trie.add("rust".to_string(), TestValue::new(1));
+        trie.add("rust-lang".to_string(), TestValue::new(2));
+        trie.add("ruby".to_string(), TestValue::new(3));
+
+        // Act: "rust-lang"を削除
+        let removed = trie.remove("rust-lang");
+
+        // Assert: "rust"と"ruby"は保持される
+        assert_eq!(trie.len(), 2);
+        assert_eq!(removed.unwrap().id, 2);
+        assert_eq!(trie.find("rust").unwrap().id, 1);
+        assert_eq!(trie.find("ruby").unwrap().id, 3);
+        assert_eq!(trie.find("rust-lang"), None);
+    }
+
+    #[test]
+    fn remove_should_return_none_for_missing_key() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::default();
+        trie.add("rust".to_string(), TestValue::new(1));
+
+        // Act
+        let removed = trie.remove("not_exists");
+
+        // Assert
+        assert_eq!(trie.len(), 1);
+        assert_eq!(removed, None);
+    }
+
+    #[test]
+    fn remove_should_remove_key_for_single_char_key() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::default();
+        trie.add("a".to_string(), TestValue::new(1));
+
+        // Act
+        let removed = trie.remove("a");
+
+        // Assert
+        assert_eq!(trie.len(), 0);
+        assert_eq!(removed.unwrap().id, 1);
+        assert_eq!(trie.find("a"), None);
     }
 }
