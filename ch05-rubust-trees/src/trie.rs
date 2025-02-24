@@ -87,7 +87,9 @@ impl<V> TrieNode<V> {
         }
     }
 
-    fn make_internal(&mut self) -> Option<V> {
+    /// Entryノードの値を取得します
+    /// 値が取得されたEntryノードはInternalノードに変換されます
+    fn take_value(&mut self) -> Option<V> {
         match self {
             Self::Internal { .. } => None,
             Self::Entry { next, .. } => {
@@ -107,6 +109,14 @@ impl<V> TrieNode<V> {
             Self::Internal { .. } => None,
             Self::Entry { value, .. } => Some(value),
         }
+    }
+
+    fn is_internal(&self) -> bool {
+        matches!(self, Self::Internal { .. })
+    }
+
+    fn is_unused(&self) -> bool {
+        self.is_internal() && self.next().is_empty()
     }
 }
 
@@ -213,49 +223,61 @@ impl<V> TrieTree<V> {
             path.push((i + 1, c));
         }
 
-        // 最後のノードをInternalに変換
-        if let Some(value) = current.make_internal() {
-            self.length -= 1;
+        // 最後のノードはEntryではなくなるため、Internalに変換
+        let value = current.take_value()?;
+        self.length -= 1;
 
-            // 最後のノードのnextが空なら削除可能
-            if current.next().is_empty() {
-                // パスを逆順に走査し、未使用のノードを削除
-                let mut prev_empty = true;
-
-                for (i, c) in path.into_iter().rev() {
-                    if i == 0 {
-                        // ルートの場合
-                        if prev_empty {
-                            if let Some(node) = self.root.get(&c) {
-                                if node.next().is_empty() && node.value().is_none() {
-                                    self.root.remove(&c);
-                                }
-                            }
-                        }
-                        break;
-                    }
-
-                    // 親ノードを取得
-                    let mut parent = self.root.get_mut(&chars[0])?;
-                    for &pc in chars[1..i].iter() {
-                        parent = parent.next_mut().get_mut(&pc)?;
-                    }
-
-                    // 現在のノードを取得
-                    if let Some(node) = parent.next().get(&c) {
-                        // ノードが空（nextが空でvalueもない）なら削除対象
-                        if node.next().is_empty() && node.value().is_none() {
-                            parent.next_mut().remove(&c);
-                            prev_empty = true;
-                        } else {
-                            prev_empty = false;
-                        }
-                    }
-                }
-            }
+        // nextが空でなければ、他の文字列で使用中なのでノードを削除しない
+        if !current.next().is_empty() {
             return Some(value);
         }
-        None
+
+        // パスを逆順に走査し、未使用のノードを削除
+        let mut can_remove_parent = true;
+
+        for (i, c) in path.into_iter().rev() {
+            if !can_remove_parent {
+                break;
+            }
+            // 削除が失敗（None）の場合は、それ以上の削除を停止
+            let (_, removed) = self.remove_node(&chars, i, c);
+            can_remove_parent = removed;
+        }
+
+        Some(value)
+    }
+
+    fn get_node_at_mut(&mut self, chars: &[char], index: usize) -> Option<&mut Box<TrieNode<V>>> {
+        if index == 0 {
+            self.root.get_mut(&chars[0])
+        } else {
+            let mut current = self.root.get_mut(&chars[0])?;
+            for &c in chars[1..index].iter() {
+                current = current.next_mut().get_mut(&c)?;
+            }
+            Some(current)
+        }
+    }
+
+    fn remove_node(&mut self, chars: &[char], index: usize, c: char) -> (Option<V>, bool) {
+        if index == 0 {
+            if let Some(node) = self.root.get_mut(&c) {
+                if node.is_unused() {
+                    let value = node.take_value();
+                    self.root.remove(&c);
+                    return (value, true);
+                }
+            }
+        } else if let Some(parent) = self.get_node_at_mut(chars, index) {
+            if let Some(node) = parent.next_mut().get_mut(&c) {
+                if node.is_unused() {
+                    let value = node.take_value();
+                    parent.next_mut().remove(&c);
+                    return (value, true);
+                }
+            }
+        }
+        (None, false)
     }
 }
 
@@ -505,6 +527,20 @@ mod tests {
     }
 
     #[test]
+    fn remove_should_return_none_when_tree_is_empty() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::<TestValue>::default();
+
+        // Act
+        let removed = trie.remove("not_exists");
+
+        // Assert
+        assert_eq!(trie.len(), 0);
+        assert_eq!(removed, None);
+    }
+
+    #[test]
     fn remove_should_remove_key_for_single_char_key() {
         // Arrange
         init();
@@ -518,5 +554,40 @@ mod tests {
         assert_eq!(trie.len(), 0);
         assert_eq!(removed.unwrap().id, 1);
         assert_eq!(trie.find("a"), None);
+    }
+
+    #[test]
+    fn remove_node_should_return_none_for_unused_nodes() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::default();
+        trie.add("rust".to_string(), TestValue::new(1));
+        trie.add("rust-lang".to_string(), TestValue::new(2));
+        // 一度"rust"を削除してInternalノードにする
+        trie.remove("rust");
+        // Act
+        let actual = trie.remove_node(&"rust-lang".chars().collect::<Vec<char>>(), 4, 'l');
+
+        // Act & Assert: 未使用になったノードを削除
+        assert_eq!(actual, (None, false));
+    }
+
+    #[test]
+    fn remove_should_keep_intermediate_values() {
+        // Arrange
+        init();
+        let mut trie = TrieTree::default();
+        // "r"と"rust"をこの順で追加（"r"がBranchノードになる）
+        trie.add("r".to_string(), TestValue::new(1));
+        trie.add("rust".to_string(), TestValue::new(2));
+
+        // Act: "rust"を削除
+        let removed = trie.remove("rust");
+
+        // Assert: "rust"は削除され、"r"は保持される
+        assert_eq!(removed.unwrap().id, 2);
+        assert_eq!(trie.len(), 1);
+        assert_eq!(trie.find("r").unwrap().id, 1);
+        assert_eq!(trie.find("rust"), None);
     }
 }
