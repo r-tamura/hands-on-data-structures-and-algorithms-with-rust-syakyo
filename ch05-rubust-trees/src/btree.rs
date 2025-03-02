@@ -4,6 +4,9 @@ type Tree = Box<Node>;
 type Key = u64;
 
 type ValueChildPair = (Option<IoTDevice>, Option<Tree>);
+
+const MAX_KEYS: usize = 3; // B-treeノードが保持できる最大要素数
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeType {
     Leaf,
@@ -108,6 +111,20 @@ impl Node {
         })
     }
 
+    fn from_nodes(
+        node_type: NodeType,
+        left: Option<Box<Node>>,
+        values: Vec<Option<IoTDevice>>,
+        children: Vec<Option<Tree>>,
+    ) -> Tree {
+        Box::new(Node {
+            values,
+            children,
+            left_child: left,
+            node_type,
+        })
+    }
+
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -142,6 +159,10 @@ impl Node {
         true
     }
 
+    fn set_left_child(&mut self, tree: Tree) {
+        self.left_child = Some(tree);
+    }
+
     // keyに一番近い子要素を削除する
     pub fn remove_key(&mut self, key: Key) -> Option<(Key, ValueChildPair)> {
         match self.find_closest_index(key) {
@@ -170,6 +191,40 @@ impl Node {
             Direction::Left => self.left_child.as_ref(),
             Direction::Right(i) => self.children.get(i).and_then(|child| child.as_ref()),
         }
+    }
+
+    /// スプリットが必要であるかを判定します
+    fn is_overflow(&self) -> bool {
+        self.len() > MAX_KEYS
+    }
+
+    fn take_after(&mut self, index: usize) -> (IoTDevice, Tree) {
+        let mid_value = self.values.remove(index);
+        let mid_node = self.children.remove(index);
+        let mut new_values = vec![];
+        let mut new_children = vec![];
+        for _ in index..self.len() {
+            let value = self.values.remove(index);
+            let child = self.children.remove(index);
+            new_values.push(value);
+            new_children.push(child);
+        }
+
+        let new_node = Node::from_nodes(self.node_type.clone(), mid_node, new_values, new_children);
+
+        (mid_value.unwrap(), new_node)
+    }
+
+    /// ノードがオーバーフローした際にノードを分割します
+    /// 新しいノードを作成し、中央の値より右側の値を新しいノードに移動します
+    /// 中央の値とその子ノードを返します
+    pub(self) fn split(&mut self) -> (IoTDevice, Tree) {
+        if !self.is_overflow() {
+            panic!("Node is not overflowed");
+        }
+        let mid = self.len() / 2;
+        let (orphan_value, new_n) = self.take_after(mid);
+        (orphan_value, new_n)
     }
 }
 
@@ -275,6 +330,48 @@ mod tests {
         assert_eq!(
             removed,
             Some((20, (Some(IoTDevice::new(20, "new_device", "")), None)))
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn node_should_panic_when_node_is_overflowed_and_split() {
+        // Arrange
+        let mut leaf = Node::new_leaf();
+        leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
+        leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
+        leaf.add_key(30, (Some(IoTDevice::new(30, "new_device", "")), None));
+
+        // Act
+        let (orphan, new_node) = leaf.split();
+
+        // Assert
+        assert_eq!(orphan, IoTDevice::new(20, "new_device", ""));
+        assert_eq!(new_node.len(), 1);
+        assert_eq!(
+            new_node.values,
+            vec![Some(IoTDevice::new(30, "new_device", ""))]
+        );
+    }
+
+    #[test]
+    fn node_should_be_split_when_overflowed() {
+        // Arrange
+        let mut leaf = Node::new_leaf();
+        leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
+        leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
+        leaf.add_key(30, (Some(IoTDevice::new(30, "new_device", "")), None));
+        leaf.add_key(40, (Some(IoTDevice::new(40, "new_device", "")), None));
+
+        // Act
+        let (orphan, new_node) = leaf.split();
+
+        // Assert
+        assert_eq!(orphan, IoTDevice::new(30, "new_device", ""));
+        assert_eq!(new_node.len(), 1);
+        assert_eq!(
+            new_node.values,
+            vec![Some(IoTDevice::new(40, "new_device", ""))]
         );
     }
 }
