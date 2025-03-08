@@ -5,7 +5,7 @@ type Key = u64;
 
 type ValueChildPair = (Option<IoTDevice>, Option<Tree>);
 
-const MAX_KEYS: usize = 3; // B-treeノードが保持できる最大要素数
+const MAX_KEYS: usize = 3; // B-treeノードが保持できる最大の子ノード数
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeType {
@@ -179,7 +179,7 @@ impl Node {
     }
 
     /// 完全一致するキーのデバイスを取得する
-    pub fn find_device_by_key(&self, key: Key) -> Option<&IoTDevice> {
+    pub fn find_value(&self, key: Key) -> Option<&IoTDevice> {
         self.values
             .iter()
             .find_map(|value| value.as_ref().filter(|device| device.numeriacl_id == key))
@@ -193,11 +193,20 @@ impl Node {
         }
     }
 
+    /// キーに一番近い要素の可変な参照を取得します
+    pub fn find_child_mut(&mut self, key: Key) -> Option<&mut Option<Tree>> {
+        match self.find_closest_index(key) {
+            Direction::Left => Some(&mut self.left_child),
+            Direction::Right(i) => self.children.get_mut(i),
+        }
+    }
+
     /// スプリットが必要であるかを判定します
     fn is_overflow(&self) -> bool {
         self.len() > MAX_KEYS
     }
 
+    /// index以降の値と子ノードを自身のノードから削除して、返します
     fn take_after(&mut self, index: usize) -> (IoTDevice, Tree) {
         let mid_value = self.values.remove(index);
         let mid_node = self.children.remove(index);
@@ -228,150 +237,275 @@ impl Node {
     }
 }
 
+pub struct BTree {
+    root: Option<Tree>,
+    order: usize,
+    pub length: u64,
+}
+
+impl BTree {
+    /// B木に値を追加します
+    pub fn add(&mut self, key: Key, value: IoTDevice) {
+        let root = self.root.take().unwrap_or(Node::new_leaf());
+        let (new_root, _) = self.add_rec(root, key, value, true);
+        self.root = Some(new_root);
+    }
+
+    fn add_rec(
+        &mut self,
+        target: Tree,
+        key: Key,
+        value: IoTDevice,
+        is_root: bool,
+    ) -> (Tree, Option<ValueChildPair>) {
+        let mut target = target;
+        match target.node_type {
+            NodeType::Leaf => {
+                if target.add_key(key, (Some(value), None)) {
+                    self.length += 1;
+                }
+            }
+            NodeType::Regular => {
+                let (key, (dev, tree)) = target.remove_key(key).unwrap();
+            }
+        };
+        (target, None)
+    }
+
+    /// B木から値を削除します
+    pub fn remove(&mut self, _key: Key) {
+        todo!();
+    }
+
+    /// B木から値を取得します
+    pub fn find(&self, key: Key) -> Option<&IoTDevice> {
+        let root = self.root.as_ref()?;
+        let mut current = root;
+        loop {
+            match current.find_value(key) {
+                Some(value) => return Some(value),
+                None => {
+                    let child = current.find_child(key)?;
+                    current = child;
+                }
+            }
+        }
+    }
+
+    /// B木を走査しますして、各要素に対して関数を適用します
+    pub fn traverse(&self, _callback: impl Fn(&IoTDevice)) {
+        todo!();
+    }
+}
+
+impl Default for BTree {
+    fn default() -> Self {
+        BTree {
+            root: None,
+            order: MAX_KEYS,
+            length: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_new_leaf() {
-        let leaf = Node::new_leaf();
-        assert_eq!(leaf.len(), 0);
-        assert!(leaf.is_empty());
+    mod node {
+        use super::*;
+
+        #[test]
+        fn test_new_leaf() {
+            let leaf = Node::new_leaf();
+            assert_eq!(leaf.len(), 0);
+            assert!(leaf.is_empty());
+        }
+
+        #[test]
+        fn test_new_regular() {
+            let regular = Node::new_regular();
+            assert_eq!(regular.len(), 0);
+            assert!(regular.is_empty());
+        }
+
+        #[test]
+        fn test_add_key_left() {
+            // Arrange
+            let mut leaf = Node::new_leaf();
+            let key = 10;
+            let value = (Some(IoTDevice::new(10, "device", "")), None);
+            assert!(leaf.add_key(key, value));
+
+            // Act
+            let new_key = 20;
+            let new_value = (Some(IoTDevice::new(20, "new_device", "")), None);
+            assert!(leaf.add_key(new_key, new_value));
+
+            // Assert
+            assert_eq!(leaf.len(), 2);
+            assert_eq!(
+                leaf.values,
+                vec![
+                    Some(IoTDevice::new(10, "device", "")),
+                    Some(IoTDevice::new(20, "new_device", ""))
+                ]
+            );
+            assert_eq!(leaf.children, vec![None, None]);
+        }
+
+        #[test]
+        fn should_add_key_right() {
+            // Arrange
+            let mut leaf = Node::new_leaf();
+            let key = 10;
+            let value = (Some(IoTDevice::new(10, "device", "")), None);
+            assert!(leaf.add_key(key, value));
+
+            // Act
+            let new_key = 5;
+            let new_value = (Some(IoTDevice::new(5, "new_device", "")), None);
+            assert!(leaf.add_key(new_key, new_value));
+
+            // Assert
+            assert_eq!(leaf.len(), 2);
+            assert_eq!(
+                leaf.values,
+                vec![
+                    Some(IoTDevice::new(5, "new_device", "")),
+                    Some(IoTDevice::new(10, "device", ""))
+                ]
+            );
+            assert_eq!(leaf.children, vec![None, None]);
+        }
+
+        #[test]
+        fn should_remove_key_left() {
+            // Arrange
+            let mut leaf = Node::new_leaf();
+            let key = 10;
+            let value = (Some(IoTDevice::new(10, "device", "")), None);
+            assert!(leaf.add_key(key, value));
+
+            // Act
+            let removed = leaf.remove_key(10);
+
+            // Assert
+            assert_eq!(leaf.len(), 0);
+            assert_eq!(
+                removed,
+                Some((10, (Some(IoTDevice::new(10, "device", "")), None)))
+            );
+        }
+
+        #[test]
+        fn should_remove_key_right() {
+            // Arrange
+            let mut leaf = Node::new_leaf();
+            leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
+            leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
+
+            // Act
+            let removed = leaf.remove_key(20);
+
+            // Assert
+            assert_eq!(leaf.len(), 1);
+            assert_eq!(
+                removed,
+                Some((20, (Some(IoTDevice::new(20, "new_device", "")), None)))
+            );
+        }
+
+        #[test]
+        #[should_panic]
+        fn should_panic_when_node_is_overflowed_and_split() {
+            // Arrange
+            let mut leaf = Node::new_leaf();
+            leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
+            leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
+            leaf.add_key(30, (Some(IoTDevice::new(30, "new_device", "")), None));
+
+            // Act
+            let (orphan, new_node) = leaf.split();
+
+            // Assert
+            assert_eq!(orphan, IoTDevice::new(20, "new_device", ""));
+            assert_eq!(new_node.len(), 1);
+            assert_eq!(
+                new_node.values,
+                vec![Some(IoTDevice::new(30, "new_device", ""))]
+            );
+        }
+
+        #[test]
+        fn should_be_split_when_overflowed() {
+            // Arrange
+            let mut leaf = Node::new_leaf();
+            leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
+            leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
+            leaf.add_key(30, (Some(IoTDevice::new(30, "new_device", "")), None));
+            leaf.add_key(40, (Some(IoTDevice::new(40, "new_device", "")), None));
+
+            // Act
+            let (orphan, new_node) = leaf.split();
+
+            // Assert
+            assert_eq!(orphan, IoTDevice::new(30, "new_device", ""));
+            assert_eq!(new_node.len(), 1);
+            assert_eq!(
+                new_node.values,
+                vec![Some(IoTDevice::new(40, "new_device", ""))]
+            );
+        }
+
+        #[test]
+        fn should_find_closest_mutable_child() {
+            // Arrange
+            let mut node = Node::new_leaf();
+            node.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
+            node.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
+
+            // Act
+            let child = node.find_child_mut(15);
+
+            // Assert
+            assert_eq!(child, Some(&mut None));
+        }
     }
 
-    #[test]
-    fn test_new_regular() {
-        let regular = Node::new_regular();
-        assert_eq!(regular.len(), 0);
-        assert!(regular.is_empty());
-    }
+    mod btree {
+        use super::*;
 
-    #[test]
-    fn test_add_key_left() {
-        // Arrange
-        let mut leaf = Node::new_leaf();
-        let key = 10;
-        let value = (Some(IoTDevice::new(10, "device", "")), None);
-        assert!(leaf.add_key(key, value));
+        #[test]
+        fn should_add_value_when_btree_is_empty() {
+            // Arrange
+            let mut btree = BTree::default();
+            let key = 10;
+            let device1 = IoTDevice::new(10, "device", "");
 
-        // Act
-        let new_key = 20;
-        let new_value = (Some(IoTDevice::new(20, "new_device", "")), None);
-        assert!(leaf.add_key(new_key, new_value));
+            // Act
+            btree.add(key, device1.clone());
 
-        // Assert
-        assert_eq!(leaf.len(), 2);
-        assert_eq!(
-            leaf.values,
-            vec![
-                Some(IoTDevice::new(10, "device", "")),
-                Some(IoTDevice::new(20, "new_device", ""))
-            ]
-        );
-        assert_eq!(leaf.children, vec![None, None]);
-    }
+            // Assert
+            assert_eq!(btree.length, 1);
+            assert_eq!(btree.find(key), Some(&device1));
+        }
 
-    #[test]
-    fn node_should_add_key_right() {
-        // Arrange
-        let mut leaf = Node::new_leaf();
-        let key = 10;
-        let value = (Some(IoTDevice::new(10, "device", "")), None);
-        assert!(leaf.add_key(key, value));
+        #[test]
+        fn should_add_value_when_btree_has_a_value() {
+            // Arrange
+            let mut btree = BTree::default();
+            let device1 = IoTDevice::new(10, "device", "");
+            let device2 = IoTDevice::new(20, "new_device", "");
+            btree.add(10, device1.clone());
 
-        // Act
-        let new_key = 5;
-        let new_value = (Some(IoTDevice::new(5, "new_device", "")), None);
-        assert!(leaf.add_key(new_key, new_value));
+            // Act
+            btree.add(20, device2.clone());
 
-        // Assert
-        assert_eq!(leaf.len(), 2);
-        assert_eq!(
-            leaf.values,
-            vec![
-                Some(IoTDevice::new(5, "new_device", "")),
-                Some(IoTDevice::new(10, "device", ""))
-            ]
-        );
-        assert_eq!(leaf.children, vec![None, None]);
-    }
-
-    #[test]
-    fn node_should_remove_key_left() {
-        // Arrange
-        let mut leaf = Node::new_leaf();
-        let key = 10;
-        let value = (Some(IoTDevice::new(10, "device", "")), None);
-        assert!(leaf.add_key(key, value));
-
-        // Act
-        let removed = leaf.remove_key(10);
-
-        // Assert
-        assert_eq!(leaf.len(), 0);
-        assert_eq!(
-            removed,
-            Some((10, (Some(IoTDevice::new(10, "device", "")), None)))
-        );
-    }
-
-    #[test]
-    fn node_should_remove_key_right() {
-        // Arrange
-        let mut leaf = Node::new_leaf();
-        leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
-        leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
-
-        // Act
-        let removed = leaf.remove_key(20);
-
-        // Assert
-        assert_eq!(leaf.len(), 1);
-        assert_eq!(
-            removed,
-            Some((20, (Some(IoTDevice::new(20, "new_device", "")), None)))
-        );
-    }
-
-    #[test]
-    #[should_panic]
-    fn node_should_panic_when_node_is_overflowed_and_split() {
-        // Arrange
-        let mut leaf = Node::new_leaf();
-        leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
-        leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
-        leaf.add_key(30, (Some(IoTDevice::new(30, "new_device", "")), None));
-
-        // Act
-        let (orphan, new_node) = leaf.split();
-
-        // Assert
-        assert_eq!(orphan, IoTDevice::new(20, "new_device", ""));
-        assert_eq!(new_node.len(), 1);
-        assert_eq!(
-            new_node.values,
-            vec![Some(IoTDevice::new(30, "new_device", ""))]
-        );
-    }
-
-    #[test]
-    fn node_should_be_split_when_overflowed() {
-        // Arrange
-        let mut leaf = Node::new_leaf();
-        leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
-        leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
-        leaf.add_key(30, (Some(IoTDevice::new(30, "new_device", "")), None));
-        leaf.add_key(40, (Some(IoTDevice::new(40, "new_device", "")), None));
-
-        // Act
-        let (orphan, new_node) = leaf.split();
-
-        // Assert
-        assert_eq!(orphan, IoTDevice::new(30, "new_device", ""));
-        assert_eq!(new_node.len(), 1);
-        assert_eq!(
-            new_node.values,
-            vec![Some(IoTDevice::new(40, "new_device", ""))]
-        );
+            // Assert
+            assert_eq!(btree.length, 2);
+            assert_eq!(btree.find(10), Some(&device1));
+            assert_eq!(btree.find(20), Some(&device2));
+        }
     }
 }
