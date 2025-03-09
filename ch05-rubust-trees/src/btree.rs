@@ -205,7 +205,7 @@ impl Node {
 
     /// trueの場合、ノードが保持できる要素数を超えており、分割が必要です
     fn is_overflow(&self) -> bool {
-        self.len() >= DEFAULT_ORDER
+        self.len() + 1 > DEFAULT_ORDER
     }
 
     /// index以降の値と子ノードを自身のノードから削除して、返します
@@ -237,6 +237,10 @@ impl Node {
         let (orphan_value, new_n) = self.take_after(mid);
         (orphan_value, new_n)
     }
+
+    pub(self) fn children(&self) -> &Vec<Option<Tree>> {
+        &self.children
+    }
 }
 
 pub struct BTree {
@@ -253,6 +257,7 @@ impl BTree {
         self.root = Some(new_root);
     }
 
+    /// B木に値を追加します
     fn add_rec(
         &mut self,
         target: Tree,
@@ -268,10 +273,48 @@ impl BTree {
                 }
             }
             NodeType::Regular => {
-                let (key, (dev, tree)) = target.remove_key(key).unwrap();
+                let (key, (dev, child)) = target.remove_key(key).unwrap();
+                let new = self.add_rec(child.unwrap(), key, value, false);
+                match dev {
+                    Some(dev) => {
+                        target.add_key(key, (Some(dev), Some(new.0)));
+                    }
+                    None => {
+                        target.set_left_child(new.0);
+                    }
+                }
+                // 子ノードへの要素追加により子ノードが分割された場合
+                // 分割地点の値と子ノードを自身のノードに追加する
+                if let Some(split_result) = new.1 {
+                    let split_key = split_result.0.as_ref().unwrap().numeriacl_id;
+                    target.add_key(split_key, split_result);
+                }
             }
         };
-        (target, None)
+
+        // ノードがオーバーフローしていない場合は分割処理をせずに終了
+        if !target.is_overflow() {
+            return (target, None);
+        }
+
+        // ノードがオーバーフローしている場合は分割処理を行う
+        let (new_parent_value, sibiling) = target.split();
+        if is_root {
+            // ルートノードがオーバーフローした場合は
+            // - 現在のルートノードを分割
+            // - 新しいルートノードを作成
+            // - 分割された現在のルートノードを新しいルートノードの子ノードに追加
+            let mut parent = Node::new_regular();
+            parent.set_left_child(target);
+            parent.add_key(
+                new_parent_value.numeriacl_id,
+                (Some(new_parent_value), Some(sibiling)),
+            );
+            (parent, None)
+        } else {
+            // ルートノード以外がオーバーフローした場合は、親ノードへ分割したノードを返す
+            (target, Some((Some(new_parent_value), Some(sibiling))))
+        }
     }
 
     /// B木から値を削除します
@@ -298,13 +341,35 @@ impl BTree {
     pub fn traverse(&self, _callback: impl Fn(&IoTDevice)) {
         todo!();
     }
+
+    /// [デバッグ用] ノード数を取得します
+    pub fn node_count(&self) -> usize {
+        let mut count = 0;
+        let root = match self.root {
+            Some(ref node) => node,
+            None => return 0,
+        };
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            count += 1;
+            match node.node_type {
+                NodeType::Leaf => {}
+                NodeType::Regular => {
+                    for child in node.children.iter().flatten() {
+                        stack.push(child);
+                    }
+                }
+            }
+        }
+        count
+    }
 }
 
 impl Default for BTree {
     fn default() -> Self {
         BTree {
             root: None,
-            order: MAX_KEYS,
+            order: DEFAULT_ORDER,
             length: 0,
         }
     }
@@ -382,7 +447,7 @@ mod tests {
         }
 
         #[test]
-        fn should_remove_key_left() {
+        fn should_remove_when_node_has_a_device() {
             // Arrange
             let mut leaf = Node::new_leaf();
             let key = 10;
@@ -509,6 +574,28 @@ mod tests {
             assert_eq!(btree.length, 2);
             assert_eq!(btree.find(10), Some(&device1));
             assert_eq!(btree.find(20), Some(&device2));
+            assert_eq!(btree.node_count(), 1);
+        }
+
+        #[test]
+        fn should_add_value_when_root_need_to_be_split() {
+            // Arrange
+            let mut btree = BTree::default();
+            let device1 = IoTDevice::new(10, "device", "");
+            let device2 = IoTDevice::new(20, "new_device", "");
+            let device3 = IoTDevice::new(30, "new_device", "");
+            btree.add(10, device1.clone());
+            btree.add(20, device2.clone());
+
+            // Act
+            btree.add(30, device3.clone());
+
+            // Assert
+            assert_eq!(btree.length, 3);
+            assert_eq!(btree.find(10), Some(&device1));
+            assert_eq!(btree.find(20), Some(&device2));
+            assert_eq!(btree.find(30), Some(&device3));
+            // assert_eq!(btree.node_count(), 3);
         }
     }
 }
