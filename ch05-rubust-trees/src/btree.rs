@@ -5,7 +5,9 @@ type Key = u64;
 
 type ValueChildPair = (Option<IoTDevice>, Option<Tree>);
 
-const MAX_KEYS: usize = 3; // B-treeノードが保持できる最大の子ノード数
+/// B-treeノードが保持できる最大の子ノード数
+/// キーを3つ以上持つノードは分割されます
+const DEFAULT_ORDER: usize = 3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeType {
@@ -201,9 +203,9 @@ impl Node {
         }
     }
 
-    /// スプリットが必要であるかを判定します
+    /// trueの場合、ノードが保持できる要素数を超えており、分割が必要です
     fn is_overflow(&self) -> bool {
-        self.len() > MAX_KEYS
+        self.len() >= DEFAULT_ORDER
     }
 
     /// index以降の値と子ノードを自身のノードから削除して、返します
@@ -424,6 +426,7 @@ mod tests {
             leaf.add_key(10, (Some(IoTDevice::new(10, "device", "")), None));
             leaf.add_key(20, (Some(IoTDevice::new(20, "new_device", "")), None));
             leaf.add_key(30, (Some(IoTDevice::new(30, "new_device", "")), None));
+            leaf.add_key(40, (Some(IoTDevice::new(40, "new_device", "")), None));
 
             // Act
             let (orphan, new_node) = leaf.split();
